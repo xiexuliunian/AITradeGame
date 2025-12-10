@@ -82,31 +82,38 @@ def fetch_provider_models():
         return jsonify({'error': 'API URL and key are required'}), 400
 
     try:
+        from urllib.parse import urlparse
+        
         models = []
         
         if requests is None:
             # Fallback when requests not available
             models = ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo']
-        elif 'openai.com' in api_url.lower():
-            headers = {
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json'
-            }
-            response = requests.get(f'{api_url}/models', headers=headers, timeout=10)
-            if response.status_code == 200:
-                result = response.json()
-                models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'].lower()]
-        elif 'deepseek' in api_url.lower():
-            headers = {
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json'
-            }
-            response = requests.get(f'{api_url}/models', headers=headers, timeout=10)
-            if response.status_code == 200:
-                result = response.json()
-                models = [m['id'] for m in result.get('data', [])]
         else:
-            models = ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo']
+            # Parse and validate URL
+            parsed_url = urlparse(api_url)
+            hostname = parsed_url.hostname or ''
+            
+            if hostname == 'api.openai.com':
+                headers = {
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json'
+                }
+                response = requests.get(f'{api_url}/models', headers=headers, timeout=10)
+                if response.status_code == 200:
+                    result = response.json()
+                    models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'].lower()]
+            elif hostname == 'api.deepseek.com' or 'deepseek' in hostname:
+                headers = {
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json'
+                }
+                response = requests.get(f'{api_url}/models', headers=headers, timeout=10)
+                if response.status_code == 200:
+                    result = response.json()
+                    models = [m['id'] for m in result.get('data', [])]
+            else:
+                models = ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo']
 
         return jsonify({'models': models})
     except Exception as e:
