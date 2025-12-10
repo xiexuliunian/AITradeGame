@@ -2,8 +2,14 @@
 AI Trader for A-Share Market - A股市场AI交易员
 """
 import json
+import traceback
 from typing import Dict
 from openai import OpenAI, APIConnectionError, APIError
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 class AShareAITrader:
     """A股市场AI交易员"""
@@ -174,14 +180,15 @@ A股交易规则：
         except Exception as e:
             error_msg = f"OpenAI API调用失败: {str(e)}"
             print(f"[ERROR] {error_msg}")
-            import traceback
             print(traceback.format_exc())
             raise Exception(error_msg)
     
     def _call_anthropic_api(self, prompt: str) -> str:
         """调用Anthropic Claude API"""
+        if requests is None:
+            raise Exception("requests library not available")
+        
         try:
-            import requests
             
             base_url = self.api_url.rstrip('/')
             if not base_url.endswith('/v1'):
@@ -215,14 +222,15 @@ A股交易规则：
         except Exception as e:
             error_msg = f"Anthropic API调用失败: {str(e)}"
             print(f"[ERROR] {error_msg}")
-            import traceback
             print(traceback.format_exc())
             raise Exception(error_msg)
     
     def _call_gemini_api(self, prompt: str) -> str:
         """调用Google Gemini API"""
+        if requests is None:
+            raise Exception("requests library not available")
+        
         try:
-            import requests
             
             base_url = self.api_url.rstrip('/')
             if not base_url.endswith('/v1'):
@@ -259,7 +267,6 @@ A股交易规则：
         except Exception as e:
             error_msg = f"Gemini API调用失败: {str(e)}"
             print(f"[ERROR] {error_msg}")
-            import traceback
             print(traceback.format_exc())
             raise Exception(error_msg)
     

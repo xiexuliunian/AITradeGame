@@ -8,12 +8,20 @@ import time
 import threading
 import json
 import re
+import traceback
+import webbrowser
+import os
 from datetime import datetime
 from trading_engine_ashare import AShareTradingEngine
 from market_data_ashare import AShareMarketDataFetcher
 from ai_trader_ashare import AShareAITrader
 from database import Database
 from version import __version__, __github_owner__, __repo__, GITHUB_REPO_URL, LATEST_RELEASE_URL
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 app = Flask(__name__)
 CORS(app)
@@ -76,8 +84,10 @@ def fetch_provider_models():
     try:
         models = []
         
-        if 'openai.com' in api_url.lower():
-            import requests
+        if requests is None:
+            # Fallback when requests not available
+            models = ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo']
+        elif 'openai.com' in api_url.lower():
             headers = {
                 'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json'
@@ -87,7 +97,6 @@ def fetch_provider_models():
                 result = response.json()
                 models = [m['id'] for m in result.get('data', []) if 'gpt' in m['id'].lower()]
         elif 'deepseek' in api_url.lower():
-            import requests
             headers = {
                 'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json'
@@ -348,7 +357,6 @@ def trading_loop():
                         
                 except Exception as e:
                     print(f"[ERROR] Model {model_id} exception: {e}")
-                    import traceback
                     print(traceback.format_exc())
                     continue
             
@@ -360,7 +368,6 @@ def trading_loop():
             
         except Exception as e:
             print(f"\n[CRITICAL] Trading loop error: {e}")
-            import traceback
             print(traceback.format_exc())
             print("[RETRY] Retrying in 60 seconds\n")
             time.sleep(60)
@@ -473,9 +480,6 @@ def init_trading_engines():
         print(f"[ERROR] Init engines failed: {e}\n")
 
 if __name__ == '__main__':
-    import webbrowser
-    import os
-    
     print("\n" + "=" * 60)
     print("AITradeGame - A股版本启动中...")
     print("=" * 60)

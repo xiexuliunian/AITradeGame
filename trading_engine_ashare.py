@@ -4,6 +4,7 @@ A-Share Trading Engine - 适配中国A股市场规则
 from datetime import datetime
 from typing import Dict
 import json
+import traceback
 
 class AShareTradingEngine:
     """
@@ -83,7 +84,6 @@ class AShareTradingEngine:
             
         except Exception as e:
             print(f"[ERROR] A-Share trading cycle failed (Model {self.model_id}): {e}")
-            import traceback
             print(traceback.format_exc())
             return {
                 'success': False,

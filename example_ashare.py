@@ -11,6 +11,7 @@ A股交易系统使用示例
 
 import sys
 import os
+import traceback
 
 # 添加当前目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -211,7 +212,6 @@ def main():
         
     except Exception as e:
         print(f"\n❌ 错误: {e}")
-        import traceback
         traceback.print_exc()
         return 1
     
