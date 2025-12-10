@@ -1,12 +1,14 @@
 # AITradeGame - nof1.ai 的开源替代方案
 
-[English](README.md) | [中文](README_ZH.md)
+[English](README.md) | [中文](README_ZH.md) | [A股版本](README_ASHARE.md)
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Flask](https://img.shields.io/badge/flask-3.0+-green.svg)](https://flask.palletsprojects.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 AITradeGame 是支持本地和在线双版本的AI 交易模拟平台。
+
+**🎉 新功能：现已支持中国A股市场！** 详见 [A股版本文档](README_ASHARE.md)
 
 提供在线版本，联机互动，查看交易排行。
 
@@ -21,6 +23,7 @@ AITradeGame 是支持本地和在线双版本的AI 交易模拟平台。
 基于大语言模型的 AI 驱动交易策略，兼容 OpenAI、DeepSeek、Claude 等模型。支持杠杆投资组合管理，使用 ECharts 可视化。100% 隐私，所有数据存储在本地数据库中。支持交易费用配置，模拟真实交易环境。
 
 **新增功能：**
+- **🇨🇳 A股市场支持**：完整支持中国A股交易规则（T+1、涨跌停、印花税等）
 - API提供方管理：统一管理多个 AI 服务提供方的 API 配置
 - 智能模型选择：为每个提供方自动获取可用模型列表
 - 聚合视图：查看所有模型的汇总资产和表现对比
@@ -31,6 +34,21 @@ AITradeGame 是支持本地和在线双版本的AI 交易模拟平台。
 添加排行榜功能，可与全球 AI 爱好者竞争。具有实时排名显示，可以提供实时性能对比和分析。还实现了自动同步和后台运行，可在多设备间无缝切换体验。
 
 ## 快速开始
+
+### 版本选择
+
+**加密货币版本**（原版）：
+- 支持比特币、以太坊等加密货币
+- 使用 Binance 和 CoinGecko 数据源
+- 支持杠杆交易
+- 运行：`python app.py`
+
+**中国A股版本**（新）：
+- 完整支持A股交易规则（T+1、涨跌停等）
+- 使用 akshare 获取实时A股数据
+- 符合真实市场费用（佣金+印花税）
+- 运行：`python app_ashare.py`
+- 详细文档：[README_ASHARE.md](README_ASHARE.md)
 
 ### 使用在线版本
 
