@@ -20,7 +20,7 @@ AITradeGame A股版本是一个专为中国A股市场设计的AI交易模拟平�
   - 无杠杆交易：符合A股市场实际情况
 
 - **实时A股行情数据**
-  - 使用 akshare 库获取真实A股数据
+  - 使用 baostock 库获取真实A股数据
   - 支持实时行情、历史K线数据
   - 技术指标计算：MA、RSI、MACD等
   - 基本面数据：市盈率、市净率、成交量等
@@ -154,9 +154,9 @@ docker-compose -f docker-compose-ashare.yml up -d
 
 ## 数据来源
 
-- **行情数据**: [akshare](https://github.com/akfamily/akshare) - 开源金融数据接口
+- **行情数据**: [baostock](http://baostock.com/) - 免费、开源的证券数据平台
 - **技术指标**: 本地计算（MA、RSI、MACD等）
-- **基本面数据**: akshare提供的上市公司数据
+- **基本面数据**: baostock提供的上市公司数据
 
 ## 使用建议
 
@@ -199,7 +199,7 @@ AI会根据以下因素做出决策：
 ├── trading_engine_ashare.py   # A股交易引擎
 ├── ai_trader_ashare.py        # A股AI交易员
 ├── database.py                # 数据库管理
-└── requirements.txt           # 依赖包（包含akshare）
+└── requirements.txt           # 依赖包（包含baostock）
 ```
 
 ## 开发和贡献
@@ -221,17 +221,17 @@ self.stocks = ['600519', '000858', ...]  # 修改为您想要的股票代码
 
 ### 数据源切换
 
-如果akshare不可用，系统会自动切换到模拟数据模式：
+如果baostock不可用，系统会自动切换到模拟数据模式：
 - 基于合理的价格波动生成模拟数据
 - 保持技术指标计算的准确性
 - 适合离线测试和开发
 
 ## 常见问题
 
-**Q: akshare安装失败怎么办？**
+**Q: baostock安装失败怎么办？**
 ```bash
 # 使用清华镜像源
-pip install -i https://pypi.tuna.tsinghua.edu.cn/simple akshare
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple baostock
 ```
 
 **Q: 如何添加更多股票？**
@@ -265,7 +265,7 @@ pip install -i https://pypi.tuna.tsinghua.edu.cn/simple akshare
 
 - 原版（加密货币）: https://github.com/chadyi/AITradeGame
 - 本仓库: https://github.com/xiexuliunian/AITradeGame
-- akshare文档: https://akshare.akfamily.xyz/
+- baostock文档: http://baostock.com/baostock/index.php/Python_API%E6%96%87%E6%A1%A3
 
 ## 许可证
 
@@ -274,5 +274,5 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 ## 致谢
 
 - 原版AITradeGame作者
-- akshare开源项目
+- baostock开源项目
 - 所有贡献者

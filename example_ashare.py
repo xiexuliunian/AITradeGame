@@ -182,7 +182,7 @@ def show_usage_guide():
     print("\n注意事项:")
     print("-" * 60)
     print("- 这是模拟交易系统，不涉及真实资金")
-    print("- 数据来源：akshare（未安装时使用模拟数据）")
+    print("- 数据来源：baostock（未安装时使用模拟数据）")
     print("- AI决策仅供参考，不构成投资建议")
     print("- 实盘交易请谨慎决策，风险自负")
     

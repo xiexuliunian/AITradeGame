@@ -1,6 +1,6 @@
 """
 Market data module - Chinese A-Share Stock Market
-使用akshare库获取A股市场数据
+使用baostock库获取A股市场数据
 """
 import time
 from typing import Dict, List
@@ -24,16 +24,49 @@ class AShareMarketDataFetcher:
         self._cache_time = {}
         self._cache_duration = 5  # Cache for 5 seconds
         
-        # 尝试导入akshare，如果失败则使用模拟数据
+        # 尝试导入baostock，如果失败则使用模拟数据
         self.use_mock = False
+        self.bs = None
+        self.bs_logged_in = False
         try:
-            import akshare as ak
-            self.ak = ak
-            print("[INFO] akshare library loaded successfully")
+            import baostock as bs
+            self.bs = bs
+            # 登录baostock系统
+            lg = bs.login()
+            if lg.error_code == '0':
+                self.bs_logged_in = True
+                print("[INFO] baostock library loaded and logged in successfully")
+            else:
+                print(f"[WARNING] baostock login failed: {lg.error_msg}")
+                self.use_mock = True
         except ImportError:
-            print("[WARNING] akshare not installed, using mock data")
-            print("[INFO] Install with: pip install akshare")
+            print("[WARNING] baostock not installed, using mock data")
+            print("[INFO] Install with: pip install baostock")
             self.use_mock = True
+    
+    def __del__(self):
+        """Logout from baostock when object is destroyed"""
+        if self.bs and self.bs_logged_in:
+            try:
+                self.bs.logout()
+            except:
+                pass
+    
+    def _format_stock_code(self, stock_code: str) -> str:
+        """Format stock code for baostock (需要添加交易所前缀)
+        
+        Args:
+            stock_code: 6位股票代码，如 '600519'
+            
+        Returns:
+            格式化的代码，如 'sh.600519' 或 'sz.000858'
+        """
+        if stock_code.startswith('6'):
+            return f'sh.{stock_code}'  # 上海证券交易所
+        elif stock_code.startswith('0') or stock_code.startswith('3'):
+            return f'sz.{stock_code}'  # 深圳证券交易所
+        else:
+            return f'sh.{stock_code}'  # 默认上海
     
     def get_current_prices(self, stocks: List[str]) -> Dict[str, float]:
         """Get current prices from A-Share market
@@ -58,24 +91,33 @@ class AShareMarketDataFetcher:
         try:
             for stock_code in stocks:
                 try:
-                    # 获取实时行情
-                    # akshare获取实时行情数据
-                    df = self.ak.stock_zh_a_spot_em()
+                    # 格式化股票代码
+                    formatted_code = self._format_stock_code(stock_code)
                     
-                    # 查找对应股票
-                    stock_data = df[df['代码'] == stock_code]
+                    # 获取实时行情数据
+                    rs = self.bs.query_latest_data(code=formatted_code)
                     
-                    if not stock_data.empty:
-                        row = stock_data.iloc[0]
-                        prices[stock_code] = {
-                            'price': float(row['最新价']),
-                            'change_24h': float(row['涨跌幅']),
-                            'name': row['名称'],
-                            'volume': float(row.get('成交量', 0)),
-                            'turnover': float(row.get('成交额', 0))
-                        }
+                    if rs.error_code == '0':
+                        data_list = []
+                        while (rs.error_code == '0') & rs.next():
+                            data_list.append(rs.get_row_data())
+                        
+                        if data_list:
+                            # baostock返回的数据是列表形式
+                            row = data_list[0]
+                            # 字段索引: 0-code, 1-name, 2-date, 3-time, 4-price, 5-pctChange等
+                            prices[stock_code] = {
+                                'price': float(row[4]) if row[4] else 0.0,  # 最新价
+                                'change_24h': float(row[5]) if row[5] else 0.0,  # 涨跌幅
+                                'name': self.default_stocks.get(stock_code, stock_code),
+                                'volume': float(row[6]) if len(row) > 6 and row[6] else 0.0,  # 成交量
+                                'turnover': float(row[7]) if len(row) > 7 and row[7] else 0.0  # 成交额
+                            }
+                        else:
+                            print(f"[WARNING] Stock {stock_code} data empty")
+                            prices[stock_code] = self._get_mock_price_single(stock_code)
                     else:
-                        print(f"[WARNING] Stock {stock_code} not found")
+                        print(f"[WARNING] Failed to query {stock_code}: {rs.error_msg}")
                         prices[stock_code] = self._get_mock_price_single(stock_code)
                         
                 except Exception as e:
@@ -134,26 +176,36 @@ class AShareMarketDataFetcher:
             return self._get_mock_market_data(stock_code)
         
         try:
-            # 获取个股详细数据
-            df = self.ak.stock_zh_a_spot_em()
-            stock_data = df[df['代码'] == stock_code]
+            # 格式化股票代码
+            formatted_code = self._format_stock_code(stock_code)
             
-            if stock_data.empty:
+            # 获取实时行情数据
+            rs = self.bs.query_latest_data(code=formatted_code)
+            
+            if rs.error_code != '0':
                 return self._get_mock_market_data(stock_code)
             
-            row = stock_data.iloc[0]
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            if not data_list:
+                return self._get_mock_market_data(stock_code)
+            
+            row = data_list[0]
+            # baostock字段: code, name, date, time, price, pctChange, volume, amount, ...
             
             return {
-                'current_price': float(row['最新价']),
-                'open_price': float(row.get('今开', 0)),
-                'high_price': float(row.get('最高', 0)),
-                'low_price': float(row.get('最低', 0)),
-                'price_change': float(row.get('涨跌幅', 0)),
-                'volume': float(row.get('成交量', 0)),
-                'turnover': float(row.get('成交额', 0)),
-                'amplitude': float(row.get('振幅', 0)),
-                'pe_ratio': float(row.get('市盈率-动态', 0)),
-                'pb_ratio': float(row.get('市净率', 0))
+                'current_price': float(row[4]) if row[4] else 0.0,
+                'open_price': float(row[8]) if len(row) > 8 and row[8] else 0.0,
+                'high_price': float(row[9]) if len(row) > 9 and row[9] else 0.0,
+                'low_price': float(row[10]) if len(row) > 10 and row[10] else 0.0,
+                'price_change': float(row[5]) if row[5] else 0.0,
+                'volume': float(row[6]) if row[6] else 0.0,
+                'turnover': float(row[7]) if row[7] else 0.0,
+                'amplitude': 0.0,  # baostock可能不直接提供，需要计算
+                'pe_ratio': 0.0,  # 需要单独查询
+                'pb_ratio': 0.0   # 需要单独查询
             }
         except Exception as e:
             print(f"[ERROR] Failed to get market data for {stock_code}: {e}")
@@ -183,33 +235,52 @@ class AShareMarketDataFetcher:
             return self._get_mock_historical_prices(stock_code, days)
         
         try:
-            # 计算日期范围
-            end_date = datetime.now().strftime('%Y%m%d')
-            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+            # 格式化股票代码
+            formatted_code = self._format_stock_code(stock_code)
             
-            # 获取历史数据
-            df = self.ak.stock_zh_a_hist(
-                symbol=stock_code,
+            # 计算日期范围
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=days*2)).strftime('%Y-%m-%d')  # 多取一些以确保有足够数据
+            
+            # 获取历史K线数据
+            rs = self.bs.query_history_k_data_plus(
+                code=formatted_code,
+                fields="date,code,open,high,low,close,volume,amount",
                 start_date=start_date,
                 end_date=end_date,
-                adjust="qfq"  # 前复权
+                frequency="d",  # 日线
+                adjustflag="2"  # 前复权
             )
             
-            if df.empty:
+            if rs.error_code != '0':
+                print(f"[ERROR] baostock query failed: {rs.error_msg}")
+                return self._get_mock_historical_prices(stock_code, days)
+            
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            if not data_list:
                 return self._get_mock_historical_prices(stock_code, days)
             
             prices = []
-            for _, row in df.iterrows():
-                prices.append({
-                    'timestamp': int(datetime.strptime(str(row['日期']), '%Y-%m-%d').timestamp() * 1000),
-                    'price': float(row['收盘']),
-                    'open': float(row['开盘']),
-                    'high': float(row['最高']),
-                    'low': float(row['最低']),
-                    'volume': float(row['成交量'])
-                })
+            for row in data_list[-days:]:  # 只取最近days天的数据
+                try:
+                    date_obj = datetime.strptime(row[0], '%Y-%m-%d')
+                    prices.append({
+                        'timestamp': int(date_obj.timestamp() * 1000),
+                        'price': float(row[5]) if row[5] else 0.0,  # close价格
+                        'open': float(row[2]) if row[2] else 0.0,
+                        'high': float(row[3]) if row[3] else 0.0,
+                        'low': float(row[4]) if row[4] else 0.0,
+                        'volume': float(row[6]) if row[6] else 0.0
+                    })
+                except (ValueError, IndexError) as e:
+                    print(f"[WARNING] Failed to parse row: {e}")
+                    continue
             
-            return prices
+            return prices if prices else self._get_mock_historical_prices(stock_code, days)
+            
         except Exception as e:
             print(f"[ERROR] Failed to get historical prices for {stock_code}: {e}")
             return self._get_mock_historical_prices(stock_code, days)
