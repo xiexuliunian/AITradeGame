@@ -89,13 +89,24 @@ class AShareMarketDataFetcher:
         prices = {}
         
         try:
+            # Get today's date and a few days back to ensure we get the latest trading day
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+            
             for stock_code in stocks:
                 try:
                     # 格式化股票代码
                     formatted_code = self._format_stock_code(stock_code)
                     
-                    # 获取实时行情数据
-                    rs = self.bs.query_latest_data(code=formatted_code)
+                    # 获取最近的K线数据（包含最新价格）
+                    rs = self.bs.query_history_k_data_plus(
+                        code=formatted_code,
+                        fields="date,code,open,high,low,close,preclose,volume,amount,pctChg",
+                        start_date=start_date,
+                        end_date=end_date,
+                        frequency="d",  # 日线
+                        adjustflag="2"  # 前复权
+                    )
                     
                     if rs.error_code == '0':
                         data_list = []
@@ -103,15 +114,15 @@ class AShareMarketDataFetcher:
                             data_list.append(rs.get_row_data())
                         
                         if data_list:
-                            # baostock返回的数据是列表形式
-                            row = data_list[0]
-                            # 字段索引: 0-code, 1-name, 2-date, 3-time, 4-price, 5-pctChange等
+                            # 取最新的一条数据（最后一个交易日）
+                            row = data_list[-1]
+                            # 字段: date, code, open, high, low, close, preclose, volume, amount, pctChg
                             prices[stock_code] = {
-                                'price': float(row[4]) if row[4] else 0.0,  # 最新价
-                                'change_24h': float(row[5]) if row[5] else 0.0,  # 涨跌幅
+                                'price': float(row[5]) if row[5] else 0.0,  # close 收盘价
+                                'change_24h': float(row[9]) if row[9] else 0.0,  # pctChg 涨跌幅
                                 'name': self.default_stocks.get(stock_code, stock_code),
-                                'volume': float(row[6]) if len(row) > 6 and row[6] else 0.0,  # 成交量
-                                'turnover': float(row[7]) if len(row) > 7 and row[7] else 0.0  # 成交额
+                                'volume': float(row[7]) if row[7] else 0.0,  # volume 成交量
+                                'turnover': float(row[8]) if row[8] else 0.0  # amount 成交额
                             }
                         else:
                             print(f"[WARNING] Stock {stock_code} data empty")
@@ -179,8 +190,18 @@ class AShareMarketDataFetcher:
             # 格式化股票代码
             formatted_code = self._format_stock_code(stock_code)
             
-            # 获取实时行情数据
-            rs = self.bs.query_latest_data(code=formatted_code)
+            # 获取最近的K线数据
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+            
+            rs = self.bs.query_history_k_data_plus(
+                code=formatted_code,
+                fields="date,code,open,high,low,close,preclose,volume,amount,pctChg",
+                start_date=start_date,
+                end_date=end_date,
+                frequency="d",
+                adjustflag="2"
+            )
             
             if rs.error_code != '0':
                 return self._get_mock_market_data(stock_code)
@@ -192,18 +213,19 @@ class AShareMarketDataFetcher:
             if not data_list:
                 return self._get_mock_market_data(stock_code)
             
-            row = data_list[0]
-            # baostock字段: code, name, date, time, price, pctChange, volume, amount, ...
+            # 取最新的一条数据
+            row = data_list[-1]
+            # 字段: date, code, open, high, low, close, preclose, volume, amount, pctChg
             
             return {
-                'current_price': float(row[4]) if row[4] else 0.0,
-                'open_price': float(row[8]) if len(row) > 8 and row[8] else 0.0,
-                'high_price': float(row[9]) if len(row) > 9 and row[9] else 0.0,
-                'low_price': float(row[10]) if len(row) > 10 and row[10] else 0.0,
-                'price_change': float(row[5]) if row[5] else 0.0,
-                'volume': float(row[6]) if row[6] else 0.0,
-                'turnover': float(row[7]) if row[7] else 0.0,
-                'amplitude': 0.0,  # baostock可能不直接提供，需要计算
+                'current_price': float(row[5]) if row[5] else 0.0,  # close
+                'open_price': float(row[2]) if row[2] else 0.0,  # open
+                'high_price': float(row[3]) if row[3] else 0.0,  # high
+                'low_price': float(row[4]) if row[4] else 0.0,  # low
+                'price_change': float(row[9]) if row[9] else 0.0,  # pctChg
+                'volume': float(row[7]) if row[7] else 0.0,  # volume
+                'turnover': float(row[8]) if row[8] else 0.0,  # amount
+                'amplitude': 0.0,  # 可以通过 (high-low)/preclose 计算
                 'pe_ratio': 0.0,  # 需要单独查询
                 'pb_ratio': 0.0   # 需要单独查询
             }
