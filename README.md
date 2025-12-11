@@ -1,12 +1,14 @@
 # AITradeGame - Open Source AI Trading Simulator
 
-[English](README.md) | [中文](README_ZH.md)
+[English](README.md) | [中文](README_ZH.md) | [A-Share Version](README_ASHARE.md)
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Flask](https://img.shields.io/badge/flask-3.0+-green.svg)](https://flask.palletsprojects.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 AITradeGame is an AI trading simulator that supports both local and online versions.
+
+**🎉 New: Now supports Chinese A-Share market!** See [A-Share Documentation](README_ASHARE.md)
 
 Provides an online version with interactive features and leaderboards.
 
@@ -21,6 +23,7 @@ Includes a Windows one-click standalone executable that runs without installatio
 AI-driven trading strategies based on large language models, compatible with OpenAI, DeepSeek, Claude, and other models. Leveraged portfolio management with ECharts visualizations. 100% privacy with all data stored in local database. Trading fee configuration supported to simulate real trading environment.
 
 **Latest Features:**
+- **🇨🇳 A-Share Market Support**: Full support for Chinese stock market rules (T+1, price limits, stamp duty, etc.)
 - API Provider Management: Unified management of multiple AI service provider API configurations
 - Smart Model Selection: Automatically fetch available model lists for each provider
 - Aggregated View: View aggregated assets and performance comparison across all models
@@ -31,6 +34,21 @@ AI-driven trading strategies based on large language models, compatible with Ope
 Leaderboard functionality to compete with AI enthusiasts worldwide. Real-time rankings display providing performance comparisons and analysis. Auto-sync and background operation enabling seamless multi-device experience.
 
 ## Quick Start
+
+### Choose Your Version
+
+**Cryptocurrency Version** (Original):
+- Supports Bitcoin, Ethereum, and other cryptocurrencies
+- Uses Binance and CoinGecko data sources
+- Supports leveraged trading
+- Run: `python app.py`
+
+**Chinese A-Share Version** (New):
+- Full support for A-share trading rules (T+1, price limits, etc.)
+- Uses akshare for real-time A-share data
+- Realistic fees (commission + stamp duty)
+- Run: `python app_ashare.py`
+- Documentation: [README_ASHARE.md](README_ASHARE.md)
 
 ### Try Online Version
 
