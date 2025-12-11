@@ -63,6 +63,7 @@ class TradingApp {
         this.initEventListeners();
         this.loadModels();
         this.initRealtimePrices();
+        this.loadMarketStatusOnce();
         this.startRefreshCycles();
         // Check for updates after initialization (with delay)
         setTimeout(() => this.checkForUpdates(true), 3000);
@@ -241,14 +242,34 @@ class TradingApp {
 
     renderMarketPrices(prices, isOpen) {
         const container = document.getElementById('marketPrices');
+        const badge = document.getElementById('marketStatusBadge');
         if (!container || !prices) return;
-        const header = `<div class="market-status">${isOpen ? '开市（实时）' : '已闭市'}</div>`;
+        if (badge) {
+            badge.textContent = isOpen ? '开市（实时）' : '已闭市';
+            badge.className = 'status-badge ' + (isOpen ? 'open' : 'closed');
+        }
+        const header = `<div class=\"market-status\">${isOpen ? '开市（实时）' : '已闭市'}</div>`;
         const rows = Object.keys(prices).map(code => {
             const p = prices[code];
             const display = isOpen ? ((p && typeof p.price === 'number') ? p.price.toFixed(2) : '/') : '已闭市';
             return `<div class=\"price-row\"><span>${code}</span><span>${display}</span></div>`;
         }).join('');
         container.innerHTML = header + rows;
+    }
+
+    async loadMarketStatusOnce() {
+        try {
+            const resp = await fetch('/api/market/status');
+            const data = await resp.json();
+            const badge = document.getElementById('marketStatusBadge');
+            if (badge && typeof data.open !== 'undefined') {
+                const isOpen = !!data.open;
+                badge.textContent = isOpen ? '开市（实时）' : '已闭市';
+                badge.className = 'status-badge ' + (isOpen ? 'open' : 'closed');
+            }
+        } catch (e) {
+            console.warn('Failed to fetch market status', e);
+        }
     }
 
     async loadStockPool() {
