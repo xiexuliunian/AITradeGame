@@ -22,19 +22,143 @@ class AShareAITrader:
     
     def make_decision(self, market_state: Dict, portfolio: Dict, 
                      account_info: Dict) -> Dict:
-        """做出交易决策"""
-        prompt = self._build_ashare_prompt(market_state, portfolio, account_info)
-        
-        response = self._call_llm(prompt)
-        
-        decisions = self._parse_response(response)
-        
+        """做出交易决策：优先使用帝论三类买卖点的规则。
+        若需要，可退回到LLM决策。
+        """
+        try:
+            return self._make_decision_by_rules(market_state, portfolio, account_info)
+        except Exception:
+            # 回退到LLM
+            prompt = self._build_ashare_prompt(market_state, portfolio, account_info)
+            response = self._call_llm(prompt)
+            decisions = self._parse_response(response)
+            return decisions
+
+    def _make_decision_by_rules(self, market_state: Dict, portfolio: Dict, account_info: Dict) -> Dict:
+        """帝论：三类买卖点（流程化实现）
+        流程（横盘→突破→趋势启动→脱离→回归修正→回调失败→趋势延续→涨幅够了→回到横盘）：
+        - 第三类买点（突破横盘，趋势启动）：MA5>MA10>MA20 且 价格突破MA5或区间上沿，MACD>0。
+        - 第一类买点（脱离后回归修正）：上行后回到均线带（MA10/MA20）附近企稳，结构未破坏。
+        - 第二类买点（回调失败确认）：回踩后无法有效跌破MA10/MA20，RSI 45~60，继续上行。
+        对应卖点：趋势破坏、冲高回落、止损退出。
+        优先级：第三类买点 > 第一类买点 > 第二类买点（同一时刻仅择其一）。
+        """
+        decisions: Dict = {}
+        positions = {pos['coin']: pos for pos in portfolio.get('positions', [])}
+
+        for stock, data in market_state.items():
+            price = data.get('price')
+            ind = data.get('indicators', {})
+            ma5 = ind.get('sma_5')
+            ma10 = ind.get('sma_10')
+            ma20 = ind.get('sma_20')
+            rsi = ind.get('rsi_14')
+            macd = ind.get('macd')
+
+            # 若缺关键指标，则跳过
+            if any(v is None for v in [price, ma5, ma10, ma20, rsi, macd]):
+                decisions[stock] = { 'signal': 'hold' }
+                continue
+
+            has_pos = stock in positions
+            qty_unit = 100
+            # 资金与仓位控制：单票不超过总资金30%，最小买入1手
+            cash = portfolio.get('cash', 0)
+            max_buy_amount = account_info.get('initial_capital', 0) * 0.3
+            target_amount = min(max_buy_amount, cash)
+            buy_qty = int(target_amount // price // qty_unit * qty_unit)
+            if buy_qty < 100:
+                buy_qty = 0
+
+            # 简化的近期高低判定（用MA区代替）
+            # 横盘近似：均线粘合（MA20 与 MA10 接近），波动较小（用价格相对MA20偏离 < 3% 近似）
+            consolidating = (abs(ma10 - ma20) / ma20 < 0.01) and (abs(price - ma20) / ma20 < 0.03)
+
+            # 第三类买点：突破横盘，趋势启动（最高优先级）
+            third_buy = (ma5 > ma10 > ma20) and (price > ma5) and (macd > 0)
+
+            # 第一类买点：脱离后回归修正（回到均线带并企稳）
+            first_buy = (ma5 >= ma10 >= ma20) and (abs(price - ma10) / ma10 < 0.01)
+
+            # 第二类买点：回调失败（难以有效跌破均线，RSI中性偏强）
+            second_buy = (abs(price - ma10) / ma10 < 0.01) and (45 <= rsi <= 60) and (ma5 >= ma10)
+
+            break_trend = (price < ma20) and (macd < 0)
+            rsi_cooling = (rsi > 70) and (price < ma5)
+
+            pos = positions.get(stock)
+            entry = pos['avg_price'] if pos else None
+            stop_loss_hit = False
+            if pos and entry:
+                stop_loss_hit = (price <= entry * 0.95)
+
+            # 决策
+            if not has_pos:
+                # 优先级顺序：第三 > 第一 > 第二
+                if third_buy and buy_qty >= 100:
+                    decisions[stock] = {
+                        'signal': 'buy',
+                        'quantity': buy_qty,
+                        'profit_target': round(price * 1.10, 2),
+                        'stop_loss': round(price * 0.95, 2),
+                        'confidence': 0.8,
+                        'justification': '第三类买点：突破横盘，趋势启动（均线多头+价格突破+MACD>0）'
+                    }
+                elif first_buy and buy_qty >= 100:
+                    decisions[stock] = {
+                        'signal': 'buy',
+                        'quantity': buy_qty,
+                        'profit_target': round(price * 1.08, 2),
+                        'stop_loss': round(price * 0.96, 2),
+                        'confidence': 0.7,
+                        'justification': '第一类买点：脱离后回归修正，靠近MA10企稳'
+                    }
+                elif second_buy and buy_qty >= 100:
+                    decisions[stock] = {
+                        'signal': 'buy',
+                        'quantity': buy_qty,
+                        'profit_target': round(price * 1.06, 2),
+                        'stop_loss': round(price * 0.94, 2),
+                        'confidence': 0.6,
+                        'justification': '第二类买点：回调失败确认，趋势延续'
+                    }
+                else:
+                    decisions[stock] = { 'signal': 'hold' }
+            else:
+                sell_qty = int(pos['quantity'] // qty_unit * qty_unit)
+                if sell_qty < 100:
+                    sell_qty = int(pos['quantity'])  # 末端可小于100全部卖出
+
+                if break_trend and sell_qty > 0:
+                    decisions[stock] = {
+                        'signal': 'sell',
+                        'quantity': sell_qty,
+                        'confidence': 0.8,
+                        'justification': '第一类卖点：跌破MA20且MACD转负'
+                    }
+                elif rsi_cooling and sell_qty > 0:
+                    decisions[stock] = {
+                        'signal': 'sell',
+                        'quantity': sell_qty,
+                        'confidence': 0.7,
+                        'justification': '第二类卖点：RSI>70后回落，价格跌破MA5'
+                    }
+                elif stop_loss_hit and sell_qty > 0:
+                    decisions[stock] = {
+                        'signal': 'sell',
+                        'quantity': sell_qty,
+                        'confidence': 0.9,
+                        'justification': '第三类卖点：止损触发（-5%）'
+                    }
+                else:
+                    decisions[stock] = { 'signal': 'hold' }
+
         return decisions
     
     def _build_ashare_prompt(self, market_state: Dict, portfolio: Dict, 
                             account_info: Dict) -> str:
-        """构建A股市场交易提示词"""
-        prompt = f"""你是一位专业的中国A股交易员。请分析市场并做出交易决策。
+        """构建A股市场交易提示词（强调帝论三类买卖点）"""
+        prompt = f"""你是一位深谙帝论（趋势交易法）且熟悉中国A股规则的专业交易员。请严格依据帝论“三类买卖点”的思想进行交易决策，并输出JSON。
 
 市场数据：
 """
@@ -69,34 +193,25 @@ class AShareAITrader:
         else:
             prompt += "无持仓\n"
         
-        prompt += """
-A股交易规则：
-1. T+1交易制度：当天买入的股票，第二天才能卖出
-2. 涨跌停限制：普通股票±10%，ST股票±5%
-3. 交易单位：买入必须是100股（1手）的整数倍
-4. 费用：
-   - 买入：佣金（约0.03%，最低5元）
-   - 卖出：佣金（约0.03%，最低5元）+ 印花税（0.1%）
-5. 无杠杆：A股不支持融资融券保证金交易（本系统）
-6. 交易时间：周一至周五 9:30-11:30, 13:00-15:00（节假日除外）
+          prompt += """
+A股交易规则（硬性约束）：
+1. T+1制度：当天买入，次日才能卖出；避免当日反向操作。
+2. 涨跌停：普通±10%，ST±5%，避免在已触及涨跌停价位下单。
+3. 交易单位：买入必须为100股整数倍；卖出末端允许不足100股一次性清仓。
+4. 费用：买入仅佣金（约0.03%，最低5元）；卖出佣金+印花税（0.1%）。
+5. 无杠杆：仅做多，`side=long`。
 
-投资策略建议：
-1. 风险控制：
-   - 单只股票仓位不超过总资金的20-30%
-   - 保持一定现金储备（至少10-20%）
-   - 及时止损，控制单笔亏损在2-5%以内
-   
-2. 选股要点：
-   - 关注基本面：市盈率、市净率、ROE等
-   - 技术面分析：均线、MACD、RSI等指标
-   - 成交量：放量上涨、缩量下跌
-   - 行业热点和政策导向
-   
-3. 买卖时机：
-   - 买入：技术指标向好，突破关键阻力位
-   - 卖出：达到止盈目标，或技术指标转弱
-   - RSI > 70 超买，考虑卖出
-   - RSI < 30 超卖，考虑买入
+帝论“三类买点/卖点”思想（用于决策判断）：
+- 第一类买点（趋势突破）：均线多头排列（MA5>MA10>MA20）、价格突破关键位（如MA5或近期高点）且MACD为正，放量更佳。
+- 第二类买点（回踩确认）：上行趋势中价格回踩至MA10/MA20附近企稳，RSI处于中性偏强（45~60），缩量回踩后再放量上行。
+- 第三类买点（超跌反弹）：强势股调整后RSI低于30出现快速回升，或RSI回到>35伴随MACD金叉与阳线；适合小仓位试探。
+- 第一类卖点（趋势破坏）：价格跌破MA20且MACD转负，趋势结构破坏，需减仓或清仓。
+- 第二类卖点（冲高回落）：RSI>70后出现回落迹象（价格跌破MA5、放量长上影等），择机止盈。
+- 第三类卖点（止损退出）：价格跌破最近关键低点或相对买入价-5%~-8%，坚决执行止损。
+
+风险与仓位控制：
+- 单票目标仓位不超过初始资金的30%，单次买入按100股整数倍；资金不足一手则`hold`。
+- 止损遵循第三类卖点原则；利润目标与风险比至少1.5:1。
 
 输出格式（仅JSON）：
 ```json
@@ -107,7 +222,7 @@ A股交易规则：
     "profit_target": 15.50,
     "stop_loss": 13.20,
     "confidence": 0.75,
-    "justification": "简短理由"
+     "justification": "基于帝论第X类买/卖点的简短理由"
   }
 }
 ```
@@ -116,6 +231,7 @@ A股交易规则：
 - quantity 必须是100的整数倍
 - signal只能是：buy（买入）、sell（卖出）、hold（持有）
 - 已有持仓的可以sell，没有持仓的可以buy
+- T+1约束：当日买入的股票不要在当天给出sell（返回hold或仅给出未来计划）
 - 请严格按照JSON格式输出，不要包含其他内容
 
 请分析并输出JSON：

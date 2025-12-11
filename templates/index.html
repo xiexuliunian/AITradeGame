@@ -111,6 +111,24 @@
                     </div>
                 </div>
 
+                <!-- Stock Pool Editor -->
+                <div class="content-card">
+                    <div class="card-header">
+                        <h3 class="card-title">股票池配置</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label>监控股票代码（逗号分隔）</label>
+                            <textarea id="stockPoolInput" class="form-input" rows="2" placeholder="例如：600519,000858,601318"></textarea>
+                            <small class="form-help">保存后将应用于实时行情与交易引擎</small>
+                        </div>
+                        <div class="form-actions">
+                            <button class="btn-secondary" id="loadStockPoolBtn">读取当前股票池</button>
+                            <button class="btn-primary" id="saveStockPoolBtn">保存股票池</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Tabs -->
                 <div class="content-card">
                     <div class="card-tabs">

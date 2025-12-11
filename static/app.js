@@ -62,7 +62,7 @@ class TradingApp {
     init() {
         this.initEventListeners();
         this.loadModels();
-        this.loadMarketPrices();
+        this.initRealtimePrices();
         this.startRefreshCycles();
         // Check for updates after initialization (with delay)
         setTimeout(() => this.checkForUpdates(true), 3000);
@@ -96,6 +96,12 @@ class TradingApp {
         document.getElementById('closeSettingsModalBtn').addEventListener('click', () => this.hideSettingsModal());
         document.getElementById('cancelSettingsBtn').addEventListener('click', () => this.hideSettingsModal());
         document.getElementById('saveSettingsBtn').addEventListener('click', () => this.saveSettings());
+
+        // Stock Pool Editor
+        const loadBtn = document.getElementById('loadStockPoolBtn');
+        const saveBtn = document.getElementById('saveStockPoolBtn');
+        if (loadBtn) loadBtn.addEventListener('click', () => this.loadStockPool());
+        if (saveBtn) saveBtn.addEventListener('click', () => this.saveStockPool());
 
         // Tabs
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -203,6 +209,76 @@ class TradingApp {
             this.hideTabsInAggregatedView();
         } catch (error) {
             console.error('Failed to load aggregated data:', error);
+        }
+    }
+
+    initRealtimePrices() {
+        try {
+            const es = new EventSource('/api/market/stream');
+            let lastRender = 0;
+            const renderInterval = 1000; // throttle to 1s
+            es.onmessage = (e) => {
+                try {
+                    const now = Date.now();
+                    if (now - lastRender < renderInterval) return;
+                    lastRender = now;
+                    const payload = JSON.parse(e.data);
+                    const prices = payload.prices || {};
+                    this.renderMarketPrices(prices);
+                } catch (err) {
+                    console.warn('SSE parse error', err);
+                }
+            };
+            es.onerror = () => {
+                console.warn('SSE error, retrying later');
+            };
+            this._es = es;
+        } catch (error) {
+            console.error('Failed to init realtime prices:', error);
+        }
+    }
+
+    renderMarketPrices(prices) {
+        const container = document.getElementById('marketPrices');
+        if (!container || !prices) return;
+        const rows = Object.keys(prices).map(code => {
+            const p = prices[code];
+            const display = (p && typeof p.price === 'number') ? p.price.toFixed(2) : '/';
+            return `<div class=\"price-row\"><span>${code}</span><span>${display}</span></div>`;
+        }).join('');
+        container.innerHTML = rows;
+    }
+
+    async loadStockPool() {
+        try {
+            const resp = await fetch('/api/stocks');
+            const data = await resp.json();
+            const stocks = data.stocks || [];
+            const input = document.getElementById('stockPoolInput');
+            if (input) input.value = stocks.join(',');
+        } catch (e) {
+            console.error('Failed to load stock pool', e);
+        }
+    }
+
+    async saveStockPool() {
+        try {
+            const input = document.getElementById('stockPoolInput');
+            if (!input) return;
+            const raw = input.value || '';
+            const stocks = raw.split(',').map(s => s.trim()).filter(Boolean);
+            const resp = await fetch('/api/stocks', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stocks })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                // Reload prices immediately
+                this.loadStockPool();
+            }
+        } catch (e) {
+            console.error('Failed to save stock pool', e);
         }
     }
 

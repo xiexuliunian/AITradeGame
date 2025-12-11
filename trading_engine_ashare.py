@@ -24,8 +24,12 @@ class AShareTradingEngine:
         self.market_fetcher = market_fetcher
         self.ai_trader = ai_trader
         
-        # A股默认股票列表
-        self.stocks = ['600519', '000858', '601318', '600036', '000333', '300750']
+        # 股票列表从设置读取，失败则回退默认
+        try:
+            settings = self.db.get_settings()
+            self.stocks = settings.get('stock_pool', ['600519','000858','601318','600036','000333','300750'])
+        except Exception:
+            self.stocks = ['600519','000858','601318','600036','000333','300750']
         
         # 费率设置
         self.commission_rate = commission_rate  # 佣金（买卖双向）

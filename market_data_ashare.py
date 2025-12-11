@@ -1,6 +1,6 @@
 """
 Market data module - Chinese A-Share Stock Market
-使用baostock库获取A股市场数据
+优先使用可用的实时数据源：akshare/Sina/Tencent/Eastmoney，失败则回退到baostock或模拟数据。
 """
 import time
 from typing import Dict, List
@@ -24,25 +24,54 @@ class AShareMarketDataFetcher:
         self._cache_time = {}
         self._cache_duration = 5  # Cache for 5 seconds
         
-        # 尝试导入baostock，如果失败则使用模拟数据
+        # 数据源优先级：akshare -> Sina -> Tencent -> Eastmoney -> baostock -> mock
+        self.source = None
         self.use_mock = False
+
+        # 探测可用数据源
+        try:
+            import akshare as ak
+            self.ak = ak
+            self.source = 'akshare'
+            print('[INFO] Using akshare for realtime quotes')
+        except Exception:
+            self.ak = None
+
+        if not self.source:
+            try:
+                import requests
+                self.requests = requests
+                self.source = 'sina'
+                print('[INFO] Using Sina quotes API')
+            except Exception:
+                self.requests = None
+
+        if not self.source and self.requests:
+            # tencent也通过HTTP获取
+            self.source = 'tencent'
+            print('[INFO] Using Tencent quotes API')
+
+        # 作为最后的数据源：baostock（日线为主，非严格实时）
         self.bs = None
         self.bs_logged_in = False
-        try:
-            import baostock as bs
-            self.bs = bs
-            # 登录baostock系统
-            lg = bs.login()
-            if lg.error_code == '0':
-                self.bs_logged_in = True
-                print("[INFO] baostock library loaded and logged in successfully")
-            else:
-                print(f"[WARNING] baostock login failed: {lg.error_msg}")
-                self.use_mock = True
-        except ImportError:
-            print("[WARNING] baostock not installed, using mock data")
-            print("[INFO] Install with: pip install baostock")
-            self.use_mock = True
+        if not self.source:
+            try:
+                import baostock as bs
+                self.bs = bs
+                lg = bs.login()
+                if lg.error_code == '0':
+                    self.bs_logged_in = True
+                    self.source = 'baostock'
+                    print('[INFO] Using baostock as fallback source')
+                else:
+                    print(f"[WARNING] baostock login failed: {lg.error_msg}")
+            except Exception:
+                pass
+
+        if not self.source:
+            # 不使用模拟数据，标记无可用实时源
+            self.source = None
+            print('[WARNING] No realtime source available')
     
     def __del__(self):
         """Logout from baostock when object is destroyed"""
@@ -83,68 +112,119 @@ class AShareMarketDataFetcher:
             if time.time() - self._cache_time[cache_key] < self._cache_duration:
                 return self._cache[cache_key]
         
-        if self.use_mock:
-            return self._get_mock_prices(stocks)
+        # 不使用模拟数据；若无数据源则返回占位
+        if not self.source:
+            return {code: self._empty_price_entry(code) for code in stocks}
         
         prices = {}
         
         try:
-            # Get today's date and a few days back to ensure we get the latest trading day
-            end_date = datetime.now().strftime('%Y-%m-%d')
-            start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
-            
-            for stock_code in stocks:
-                try:
-                    # 格式化股票代码
-                    formatted_code = self._format_stock_code(stock_code)
-                    
-                    # 获取最近的K线数据（包含最新价格）
-                    rs = self.bs.query_history_k_data_plus(
-                        code=formatted_code,
-                        fields="date,code,open,high,low,close,preclose,volume,amount,pctChg",
-                        start_date=start_date,
-                        end_date=end_date,
-                        frequency="d",  # 日线
-                        adjustflag="2"  # 前复权
-                    )
-                    
-                    if rs.error_code == '0':
-                        data_list = []
-                        while (rs.error_code == '0') & rs.next():
-                            data_list.append(rs.get_row_data())
-                        
-                        if data_list:
-                            # 取最新的一条数据（最后一个交易日）
-                            row = data_list[-1]
-                            # 字段: date, code, open, high, low, close, preclose, volume, amount, pctChg
-                            prices[stock_code] = {
-                                'price': float(row[5]) if row[5] else 0.0,  # close 收盘价
-                                'change_24h': float(row[9]) if row[9] else 0.0,  # pctChg 涨跌幅
-                                'name': self.default_stocks.get(stock_code, stock_code),
-                                'volume': float(row[7]) if row[7] else 0.0,  # volume 成交量
-                                'turnover': float(row[8]) if row[8] else 0.0  # amount 成交额
-                            }
-                        else:
-                            print(f"[WARNING] Stock {stock_code} data empty")
-                            prices[stock_code] = self._get_mock_price_single(stock_code)
+            if self.source == 'akshare' and self.ak:
+                # akshare 实时行情
+                df = self.ak.stock_zh_a_spot()
+                code_map = {self._normalize_code(c): i for i, c in enumerate(df['代码'].tolist())}
+                for stock_code in stocks:
+                    idx = code_map.get(stock_code)
+                    if idx is not None:
+                        row = df.iloc[idx]
+                        prices[stock_code] = {
+                            'price': float(row['最新价']) if '最新价' in row else 0.0,
+                            'change_24h': float(row['涨跌幅']) if '涨跌幅' in row else 0.0,
+                            'name': self.default_stocks.get(stock_code, stock_code),
+                            'volume': float(row.get('成交量', 0)),
+                            'turnover': float(row.get('成交额', 0))
+                        }
                     else:
-                        print(f"[WARNING] Failed to query {stock_code}: {rs.error_msg}")
                         prices[stock_code] = self._get_mock_price_single(stock_code)
-                        
-                except Exception as e:
-                    print(f"[ERROR] Failed to fetch {stock_code}: {e}")
-                    prices[stock_code] = self._get_mock_price_single(stock_code)
-                    continue
-            
-            # Update cache
+
+            elif self.source in ('sina', 'tencent') and self.requests:
+                # 使用新浪或腾讯接口
+                # 新浪: http://hq.sinajs.cn/list=sh600519,sz000858
+                # 腾讯: http://qt.gtimg.cn/q=sh600519,sz000858
+                prefix_codes = [self._prefix_exchange(c) for c in stocks]
+                if self.source == 'sina':
+                    url = 'http://hq.sinajs.cn/list=' + ','.join(prefix_codes)
+                else:
+                    url = 'http://qt.gtimg.cn/q=' + ','.join(prefix_codes)
+                headers = {'Referer': 'http://finance.sina.com.cn/'}
+                resp = self.requests.get(url, headers=headers, timeout=5)
+                text = resp.text
+                lines = text.strip().split(';')
+                for line, code in zip(lines, stocks):
+                    try:
+                        if self.source == 'sina':
+                            # var hq_str_sh600519="贵州茅台,1600.00,1602.00,1598.00,...";
+                            parts = line.split('="')
+                            if len(parts) < 2:
+                                prices[code] = self._get_mock_price_single(code)
+                                continue
+                            data = parts[1].split(',')
+                            name = data[0]
+                            price = float(data[3]) if len(data) > 3 and data[3] else 0.0
+                            prev_close = float(data[2]) if len(data) > 2 and data[2] else 0.0
+                            change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+                        else:
+                            # v_sh600519="51~贵州茅台~1600.00~..." 腾讯格式，索引不同
+                            parts = line.split('~')
+                            name = parts[1] if len(parts) > 1 else code
+                            price = float(parts[3]) if len(parts) > 3 and parts[3] else 0.0
+                            prev_close = float(parts[4]) if len(parts) > 4 and parts[4] else 0.0
+                            change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+
+                        prices[code] = {
+                            'price': price,
+                            'change_24h': change_pct,
+                            'name': name,
+                            'volume': 0,
+                            'turnover': 0
+                        }
+                    except Exception:
+                        prices[code] = self._get_mock_price_single(code)
+
+            elif self.source == 'baostock' and self.bs:
+                # 回退到baostock（日线）
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
+                for stock_code in stocks:
+                    try:
+                        formatted_code = self._format_stock_code(stock_code)
+                        rs = self.bs.query_history_k_data_plus(
+                            code=formatted_code,
+                            fields="date,code,open,high,low,close,preclose,volume,amount,pctChg",
+                            start_date=start_date,
+                            end_date=end_date,
+                            frequency="d",
+                            adjustflag="2"
+                        )
+                        if rs.error_code == '0':
+                            data_list = []
+                            while (rs.error_code == '0') & rs.next():
+                                data_list.append(rs.get_row_data())
+                            if data_list:
+                                row = data_list[-1]
+                                prices[stock_code] = {
+                                    'price': float(row[5]) if row[5] else 0.0,
+                                    'change_24h': float(row[9]) if row[9] else 0.0,
+                                    'name': self.default_stocks.get(stock_code, stock_code),
+                                    'volume': float(row[7]) if row[7] else 0.0,
+                                    'turnover': float(row[8]) if row[8] else 0.0
+                                }
+                            else:
+                                prices[stock_code] = self._empty_price_entry(stock_code)
+                        else:
+                            prices[stock_code] = self._empty_price_entry(stock_code)
+                    except Exception:
+                        prices[stock_code] = self._empty_price_entry(stock_code)
+            else:
+                prices = {code: self._empty_price_entry(code) for code in stocks}
+
+            # 更新缓存
             self._cache[cache_key] = prices
             self._cache_time[cache_key] = time.time()
-            
             return prices
-            
         except Exception as e:
-            print(f"[ERROR] A-Share market data fetch failed: {e}")
-            return self._get_mock_prices(stocks)
+            print(f"[ERROR] Market data fetch failed: {e}")
+            return {code: self._empty_price_entry(code) for code in stocks}
     
     def _get_mock_prices(self, stocks: List[str]) -> Dict[str, float]:
         """Generate mock prices for testing"""
@@ -178,8 +258,29 @@ class AShareMarketDataFetcher:
         return mock_prices
     
     def _get_mock_price_single(self, stock_code: str) -> Dict:
-        """Get mock price for a single stock"""
-        return self._get_mock_prices([stock_code])[stock_code]
+        """Deprecated: mock disabled; return empty entry"""
+        return self._empty_price_entry(stock_code)
+
+    def _empty_price_entry(self, stock_code: str) -> Dict:
+        """Return placeholder when realtime price unavailable"""
+        return {
+            'price': None,
+            'change_24h': None,
+            'name': self.default_stocks.get(stock_code, stock_code),
+            'volume': None,
+            'turnover': None
+        }
+
+    def _normalize_code(self, code: str) -> str:
+        """Normalize code to 6-digit form if possible"""
+        return code[-6:] if code else code
+
+    def _prefix_exchange(self, code: str) -> str:
+        """Add exchange prefix for Sina/Tencent API"""
+        if code.startswith('6'):
+            return f'sh{code}'
+        else:
+            return f'sz{code}'
     
     def get_market_data(self, stock_code: str) -> Dict:
         """Get detailed market data for a stock"""

@@ -112,6 +112,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trading_frequency_minutes INTEGER DEFAULT 60,
                 trading_fee_rate REAL DEFAULT 0.001,
+                stock_pool TEXT DEFAULT '["600519","000858","601318","600036","000333","300750"]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -121,8 +122,8 @@ class Database:
         cursor.execute('SELECT COUNT(*) FROM settings')
         if cursor.fetchone()[0] == 0:
             cursor.execute('''
-                INSERT INTO settings (trading_frequency_minutes, trading_fee_rate)
-                VALUES (60, 0.001)
+                INSERT INTO settings (trading_frequency_minutes, trading_fee_rate, stock_pool)
+                VALUES (60, 0.001, '["600519","000858","601318","600036","000333","300750"]')
             ''')
 
         conn.commit()
@@ -421,7 +422,7 @@ class Database:
         cursor = conn.cursor()
 
         cursor.execute('''
-            SELECT trading_frequency_minutes, trading_fee_rate
+            SELECT trading_frequency_minutes, trading_fee_rate, stock_pool
             FROM settings
             ORDER BY id DESC
             LIMIT 1
@@ -433,16 +434,18 @@ class Database:
         if row:
             return {
                 'trading_frequency_minutes': row['trading_frequency_minutes'],
-                'trading_fee_rate': row['trading_fee_rate']
+                'trading_fee_rate': row['trading_fee_rate'],
+                'stock_pool': json.loads(row['stock_pool']) if row['stock_pool'] else []
             }
         else:
             # Return default settings if none exist
             return {
                 'trading_frequency_minutes': 60,
-                'trading_fee_rate': 0.001
+                'trading_fee_rate': 0.001,
+                'stock_pool': ["600519","000858","601318","600036","000333","300750"]
             }
 
-    def update_settings(self, trading_frequency_minutes: int, trading_fee_rate: float) -> bool:
+    def update_settings(self, trading_frequency_minutes: int, trading_fee_rate: float, stock_pool: Optional[List[str]] = None) -> bool:
         """Update system settings"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -452,11 +455,12 @@ class Database:
                 UPDATE settings
                 SET trading_frequency_minutes = ?,
                     trading_fee_rate = ?,
+                    stock_pool = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = (
                     SELECT id FROM settings ORDER BY id DESC LIMIT 1
                 )
-            ''', (trading_frequency_minutes, trading_fee_rate))
+            ''', (trading_frequency_minutes, trading_fee_rate, json.dumps(stock_pool or ["600519","000858","601318","600036","000333","300750"])) )
 
             conn.commit()
             conn.close()

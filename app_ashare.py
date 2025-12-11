@@ -2,7 +2,7 @@
 A-Share Trading Application - A股交易应用主程序
 使用方法：python app_ashare.py
 """
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
 import time
 import threading
@@ -30,6 +30,10 @@ db = Database('AITradeGame_AShare.db')
 market_fetcher = AShareMarketDataFetcher()
 trading_engines = {}
 auto_trading = True
+price_cache = {
+    'last_update': None,
+    'prices': {}
+}
 
 # A股交易费率
 COMMISSION_RATE = 0.0003  # 佣金 0.03%
@@ -423,8 +427,9 @@ def update_settings():
         data = request.json
         trading_frequency_minutes = int(data.get('trading_frequency_minutes', 60))
         trading_fee_rate = float(data.get('trading_fee_rate', COMMISSION_RATE))
+        stock_pool = data.get('stock_pool') or ['600519','000858','601318','600036','000333','300750']
 
-        success = db.update_settings(trading_frequency_minutes, trading_fee_rate)
+        success = db.update_settings(trading_frequency_minutes, trading_fee_rate, stock_pool)
 
         if success:
             return jsonify({'success': True, 'message': 'Settings updated successfully'})
@@ -432,6 +437,44 @@ def update_settings():
             return jsonify({'success': False, 'error': 'Failed to update settings'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# ============ Stock Pool & Realtime Prices ============
+
+@app.route('/api/stocks', methods=['GET'])
+def get_stocks():
+    """获取当前监控的股票池"""
+    settings = db.get_settings()
+    return jsonify({'stocks': settings.get('stock_pool', [])})
+
+@app.route('/api/stocks', methods=['PUT'])
+def update_stocks():
+    """更新股票池"""
+    data = request.json
+    stocks = data.get('stocks', [])
+    settings = db.get_settings()
+    success = db.update_settings(settings['trading_frequency_minutes'], settings['trading_fee_rate'], stocks)
+    return jsonify({'success': success, 'stocks': stocks})
+
+@app.route('/api/market/stream')
+def market_stream():
+    """Server-Sent Events (SSE) 推送实时行情"""
+    def event_stream():
+        import time as _t
+        while True:
+            try:
+                settings = db.get_settings()
+                stocks = settings.get('stock_pool', [])
+                prices = market_fetcher.get_current_prices(stocks)
+                price_cache['last_update'] = datetime.now().isoformat()
+                price_cache['prices'] = prices
+                payload = json.dumps({'ts': price_cache['last_update'], 'prices': prices})
+                yield f"data: {payload}\n\n"
+                _t.sleep(2)
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                _t.sleep(5)
+
+    return Response(event_stream(), mimetype='text/event-stream')
 
 @app.route('/api/version', methods=['GET'])
 def get_version():
