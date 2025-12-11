@@ -193,7 +193,7 @@ class AShareAITrader:
         else:
             prompt += "无持仓\n"
         
-          prompt += """
+        prompt += """
 A股交易规则（硬性约束）：
 1. T+1制度：当天买入，次日才能卖出；避免当日反向操作。
 2. 涨跌停：普通±10%，ST±5%，避免在已触及涨跌停价位下单。
@@ -222,7 +222,7 @@ A股交易规则（硬性约束）：
     "profit_target": 15.50,
     "stop_loss": 13.20,
     "confidence": 0.75,
-     "justification": "基于帝论第X类买/卖点的简短理由"
+    "justification": "基于帝论第X类买/卖点的简短理由"
   }
 }
 ```
