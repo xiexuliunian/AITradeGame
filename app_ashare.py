@@ -314,11 +314,19 @@ def get_market_prices():
     """获取市场价格"""
     settings = db.get_settings()
     stocks = settings.get('stock_pool', ['600519', '000858', '601318', '600036', '000333', '300750'])
+    is_open = market_fetcher.is_market_open()
+    if not is_open:
+        # 闭市时不再拉取数据，直接返回占位
+        placeholder = {code: {
+            'price': None,
+            'change_24h': None,
+            'name': code,
+            'volume': None,
+            'turnover': None
+        } for code in stocks}
+        return jsonify({'open': False, 'prices': placeholder})
     prices = market_fetcher.get_current_prices(stocks)
-    return jsonify({
-        'open': market_fetcher.is_market_open(),
-        'prices': prices
-    })
+    return jsonify({'open': True, 'prices': prices})
 
 @app.route('/api/models/<int:model_id>/execute', methods=['POST'])
 def execute_trading(model_id):
@@ -483,10 +491,25 @@ def market_stream():
             try:
                 settings = db.get_settings()
                 stocks = settings.get('stock_pool', [])
+                is_open = market_fetcher.is_market_open()
+                if not is_open:
+                    # 闭市时不再拉取，推送占位与状态
+                    placeholder = {code: {
+                        'price': None,
+                        'change_24h': None,
+                        'name': code,
+                        'volume': None,
+                        'turnover': None
+                    } for code in stocks}
+                    payload = json.dumps({'ts': datetime.now().isoformat(), 'open': False, 'prices': placeholder})
+                    yield f"data: {payload}\n\n"
+                    _t.sleep(10)
+                    continue
+
                 prices = market_fetcher.get_current_prices(stocks)
                 price_cache['last_update'] = datetime.now().isoformat()
                 price_cache['prices'] = prices
-                payload = json.dumps({'ts': price_cache['last_update'], 'open': market_fetcher.is_market_open(), 'prices': prices})
+                payload = json.dumps({'ts': price_cache['last_update'], 'open': True, 'prices': prices})
                 yield f"data: {payload}\n\n"
                 _t.sleep(2)
             except Exception as e:
