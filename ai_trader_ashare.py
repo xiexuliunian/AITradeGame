@@ -22,17 +22,10 @@ class AShareAITrader:
     
     def make_decision(self, market_state: Dict, portfolio: Dict, 
                      account_info: Dict) -> Dict:
-        """做出交易决策：优先使用帝论三类买卖点的规则。
-        若需要，可退回到LLM决策。
-        """
-        try:
-            return self._make_decision_by_rules(market_state, portfolio, account_info)
-        except Exception:
-            # 回退到LLM
-            prompt = self._build_ashare_prompt(market_state, portfolio, account_info)
-            response = self._call_llm(prompt)
-            decisions = self._parse_response(response)
-            return decisions
+        """做出交易决策（LLM-only）：严格依据两份PDF核心思想，尤其帝论三类买卖点"""
+        prompt = self._build_ashare_prompt(market_state, portfolio, account_info)
+        response_text = self._call_llm(prompt)
+        return self._parse_response(response_text)
 
     def _make_decision_by_rules(self, market_state: Dict, portfolio: Dict, account_info: Dict) -> Dict:
         """帝论：三类买卖点（流程化实现）
@@ -45,6 +38,16 @@ class AShareAITrader:
         """
         decisions: Dict = {}
         positions = {pos['coin']: pos for pos in portfolio.get('positions', [])}
+        sp = account_info.get('strategy_params', {})
+        # 参数默认值（简易交易系统）
+        pull_tol = sp.get('ma', {}).get('pullback_tolerance', 0.01)
+        rsi_buy_low = sp.get('rsi', {}).get('buy_low', 30)
+        rsi_neu_low = sp.get('rsi', {}).get('neutral_low', 45)
+        rsi_neu_high = sp.get('rsi', {}).get('neutral_high', 60)
+        rsi_sell_high = sp.get('rsi', {}).get('sell_high', 70)
+        pos_limit_pct = sp.get('risk', {}).get('position_limit_pct', 0.30)
+        stop_loss_pct = sp.get('risk', {}).get('stop_loss_pct', 0.05)
+        tp_mults = sp.get('risk', {}).get('tp_multipliers', {'third': 1.06, 'first': 1.08, 'trend': 1.10})
 
         for stock, data in market_state.items():
             price = data.get('price')
@@ -64,7 +67,7 @@ class AShareAITrader:
             qty_unit = 100
             # 资金与仓位控制：单票不超过总资金30%，最小买入1手
             cash = portfolio.get('cash', 0)
-            max_buy_amount = account_info.get('initial_capital', 0) * 0.3
+            max_buy_amount = account_info.get('initial_capital', 0) * pos_limit_pct
             target_amount = min(max_buy_amount, cash)
             buy_qty = int(target_amount // price // qty_unit * qty_unit)
             if buy_qty < 100:
@@ -72,25 +75,27 @@ class AShareAITrader:
 
             # 简化的近期高低判定（用MA区代替）
             # 横盘近似：均线粘合（MA20 与 MA10 接近），波动较小（用价格相对MA20偏离 < 3% 近似）
-            consolidating = (abs(ma10 - ma20) / ma20 < 0.01) and (abs(price - ma20) / ma20 < 0.03)
+            consolidating = (abs(ma10 - ma20) / ma20 < pull_tol) and (abs(price - ma20) / ma20 < 3*pull_tol)
 
-            # 第三类买点：突破横盘，趋势启动（最高优先级）
-            third_buy = (ma5 > ma10 > ma20) and (price > ma5) and (macd > 0)
+            # 第三类买点：突破横盘，趋势启动（最高优先级）或超跌反弹（RSI低位回升）
+            trend_start = (ma5 > ma10 > ma20) and (price > ma5) and (macd > 0)
+            oversold_rebound = (rsi <= rsi_buy_low) and (macd >= 0)
+            third_buy = trend_start or oversold_rebound
 
             # 第一类买点：脱离后回归修正（回到均线带并企稳）
-            first_buy = (ma5 >= ma10 >= ma20) and (abs(price - ma10) / ma10 < 0.01)
+            first_buy = (ma5 >= ma10 >= ma20) and (abs(price - ma10) / ma10 < pull_tol)
 
             # 第二类买点：回调失败（难以有效跌破均线，RSI中性偏强）
-            second_buy = (abs(price - ma10) / ma10 < 0.01) and (45 <= rsi <= 60) and (ma5 >= ma10)
+            second_buy = (abs(price - ma10) / ma10 < pull_tol) and (rsi_neu_low <= rsi <= rsi_neu_high) and (ma5 >= ma10)
 
             break_trend = (price < ma20) and (macd < 0)
-            rsi_cooling = (rsi > 70) and (price < ma5)
+            rsi_cooling = (rsi > rsi_sell_high) and (price < ma5)
 
             pos = positions.get(stock)
             entry = pos['avg_price'] if pos else None
             stop_loss_hit = False
             if pos and entry:
-                stop_loss_hit = (price <= entry * 0.95)
+                stop_loss_hit = (price <= entry * (1 - stop_loss_pct))
 
             # 决策
             if not has_pos:
@@ -99,28 +104,28 @@ class AShareAITrader:
                     decisions[stock] = {
                         'signal': 'buy',
                         'quantity': buy_qty,
-                        'profit_target': round(price * 1.10, 2),
-                        'stop_loss': round(price * 0.95, 2),
+                        'tp': round(price * tp_mults.get('trend', 1.10), 2),
+                        'sl': round(price * (1 - stop_loss_pct), 2),
                         'confidence': 0.8,
-                        'justification': '第三类买点：突破横盘，趋势启动（均线多头+价格突破+MACD>0）'
+                        'reason': '第三类买点：趋势启动或RSI超跌反弹'
                     }
                 elif first_buy and buy_qty >= 100:
                     decisions[stock] = {
                         'signal': 'buy',
                         'quantity': buy_qty,
-                        'profit_target': round(price * 1.08, 2),
-                        'stop_loss': round(price * 0.96, 2),
+                        'tp': round(price * tp_mults.get('first', 1.08), 2),
+                        'sl': round(price * (1 - max(stop_loss_pct - 0.01, 0.03)), 2),
                         'confidence': 0.7,
-                        'justification': '第一类买点：脱离后回归修正，靠近MA10企稳'
+                        'reason': '第一类买点：脱离后回归修正，靠近MA10企稳'
                     }
                 elif second_buy and buy_qty >= 100:
                     decisions[stock] = {
                         'signal': 'buy',
                         'quantity': buy_qty,
-                        'profit_target': round(price * 1.06, 2),
-                        'stop_loss': round(price * 0.94, 2),
+                        'tp': round(price * tp_mults.get('third', 1.06), 2),
+                        'sl': round(price * (1 - max(stop_loss_pct + 0.01, 0.04)), 2),
                         'confidence': 0.6,
-                        'justification': '第二类买点：回调失败确认，趋势延续'
+                        'reason': '第二类买点：回调失败确认，趋势延续'
                     }
                 else:
                     decisions[stock] = { 'signal': 'hold' }
@@ -134,110 +139,110 @@ class AShareAITrader:
                         'signal': 'sell',
                         'quantity': sell_qty,
                         'confidence': 0.8,
-                        'justification': '第一类卖点：跌破MA20且MACD转负'
+                        'reason': '第一类卖点：跌破MA20且MACD转负'
                     }
                 elif rsi_cooling and sell_qty > 0:
                     decisions[stock] = {
                         'signal': 'sell',
                         'quantity': sell_qty,
                         'confidence': 0.7,
-                        'justification': '第二类卖点：RSI>70后回落，价格跌破MA5'
+                        'reason': '第二类卖点：RSI>阈值后回落，价格跌破MA5'
                     }
                 elif stop_loss_hit and sell_qty > 0:
                     decisions[stock] = {
                         'signal': 'sell',
                         'quantity': sell_qty,
                         'confidence': 0.9,
-                        'justification': '第三类卖点：止损触发（-5%）'
+                        'reason': '第三类卖点：止损触发'
                     }
                 else:
                     decisions[stock] = { 'signal': 'hold' }
 
         return decisions
     
-    def _build_ashare_prompt(self, market_state: Dict, portfolio: Dict, 
-                            account_info: Dict) -> str:
-        """构建A股市场交易提示词（强调帝论三类买卖点）"""
-        prompt = f"""你是一位深谙帝论（趋势交易法）且熟悉中国A股规则的专业交易员。请严格依据帝论“三类买卖点”的思想进行交易决策，并输出JSON。
+    def _build_ashare_prompt(self, market_state: Dict, portfolio: Dict, account_info: Dict) -> str:
+        """构建提示词：让LLM完全按PDF与帝论三类买卖点输出JSON决策"""
+        sp = account_info.get('strategy_params', {})
+        pull_tol = sp.get('ma', {}).get('pullback_tolerance', 0.01)
+        rsi_buy_low = sp.get('rsi', {}).get('buy_low', 30)
+        rsi_neu_low = sp.get('rsi', {}).get('neutral_low', 45)
+        rsi_neu_high = sp.get('rsi', {}).get('neutral_high', 60)
+        rsi_sell_high = sp.get('rsi', {}).get('sell_high', 70)
+        pos_limit_pct = sp.get('risk', {}).get('position_limit_pct', 0.30)
+        stop_loss_pct = sp.get('risk', {}).get('stop_loss_pct', 0.05)
+        tp_mults = sp.get('risk', {}).get('tp_multipliers', {'third': 1.06, 'first': 1.08, 'trend': 1.10})
 
-市场数据：
-"""
-        for stock, data in market_state.items():
-            stock_name = data.get('name', stock)
-            prompt += f"{stock} ({stock_name}): ¥{data['price']:.2f} ({data['change_24h']:+.2f}%)\n"
-            if 'indicators' in data and data['indicators']:
-                indicators = data['indicators']
-                prompt += f"  MA5: ¥{indicators.get('sma_5', 0):.2f}, MA10: ¥{indicators.get('sma_10', 0):.2f}, MA20: ¥{indicators.get('sma_20', 0):.2f}, RSI: {indicators.get('rsi_14', 0):.1f}\n"
-                prompt += f"  MACD: {indicators.get('macd', 0):.2f}, 7日涨跌: {indicators.get('price_change_7d', 0):.2f}%\n"
-        
-        prompt += f"""
-账户状态：
-- 初始资金：¥{account_info['initial_capital']:.2f}
-- 总资产：¥{portfolio['total_value']:.2f}
-- 可用资金：¥{portfolio['cash']:.2f}
-- 总收益率：{account_info['total_return']:.2f}%
+        lines = []
+        lines.append("你是一位严格遵循两份PDF核心思想（简易交易系统+帝论三类买卖点）的中国A股专业交易员。")
+        lines.append("请完全按照其中的规则、流程和风控要求进行交易决策，并只输出JSON。")
 
-当前持仓：
-"""
-        if portfolio['positions']:
+        lines.append("\n[市场数据与指标]")
+        for code, d in market_state.items():
+            name = d.get('name', code)
+            price = d.get('price')
+            chg = d.get('change_24h')
+            ind = d.get('indicators', {})
+            ma5 = ind.get('sma_5')
+            ma10 = ind.get('sma_10')
+            ma20 = ind.get('sma_20')
+            rsi = ind.get('rsi_14')
+            macd = ind.get('macd')
+            lines.append(f"- {code}({name}): 价¥{price}, 涨跌{chg}%, MA5 {ma5}, MA10 {ma10}, MA20 {ma20}, RSI {rsi}, MACD {macd}")
+
+        lines.append("\n[账户与持仓]")
+        lines.append(f"初始资金: ¥{account_info.get('initial_capital')}, 总资产: ¥{portfolio.get('total_value')}, 现金: ¥{portfolio.get('cash')}, 总收益率: {account_info.get('total_return')}%")
+        if portfolio.get('positions'):
             for pos in portfolio['positions']:
-                stock_code = pos['coin']  # 数据库中使用coin字段存储股票代码
-                stock_name = ''
-                if stock_code in market_state:
-                    stock_name = market_state[stock_code].get('name', '')
-                prompt += f"- {stock_code} ({stock_name}): {int(pos['quantity'])}股 @ ¥{pos['avg_price']:.2f}"
-                if pos.get('current_price'):
-                    pnl_pct = ((pos['current_price'] - pos['avg_price']) / pos['avg_price']) * 100
-                    prompt += f" (当前¥{pos['current_price']:.2f}, {pnl_pct:+.2f}%)"
-                prompt += "\n"
+                cp = pos.get('current_price')
+                pnl_pct = ((cp - pos['avg_price'])/pos['avg_price']*100) if cp and pos['avg_price'] else None
+                lines.append(f"- {pos['coin']}: {int(pos['quantity'])}股 @¥{pos['avg_price']} (当前¥{cp}, {pnl_pct if pnl_pct is not None else 'NA'}% )")
         else:
-            prompt += "无持仓\n"
-        
-        prompt += """
-A股交易规则（硬性约束）：
-1. T+1制度：当天买入，次日才能卖出；避免当日反向操作。
-2. 涨跌停：普通±10%，ST±5%，避免在已触及涨跌停价位下单。
-3. 交易单位：买入必须为100股整数倍；卖出末端允许不足100股一次性清仓。
-4. 费用：买入仅佣金（约0.03%，最低5元）；卖出佣金+印花税（0.1%）。
-5. 无杠杆：仅做多，`side=long`。
+            lines.append("- 无持仓")
 
-帝论“三类买点/卖点”思想（用于决策判断）：
-- 第一类买点（趋势突破）：均线多头排列（MA5>MA10>MA20）、价格突破关键位（如MA5或近期高点）且MACD为正，放量更佳。
-- 第二类买点（回踩确认）：上行趋势中价格回踩至MA10/MA20附近企稳，RSI处于中性偏强（45~60），缩量回踩后再放量上行。
-- 第三类买点（超跌反弹）：强势股调整后RSI低于30出现快速回升，或RSI回到>35伴随MACD金叉与阳线；适合小仓位试探。
-- 第一类卖点（趋势破坏）：价格跌破MA20且MACD转负，趋势结构破坏，需减仓或清仓。
-- 第二类卖点（冲高回落）：RSI>70后出现回落迹象（价格跌破MA5、放量长上影等），择机止盈。
-- 第三类卖点（止损退出）：价格跌破最近关键低点或相对买入价-5%~-8%，坚决执行止损。
+        lines.append("\n[硬性约束]")
+        lines.append("1) T+1：当日买入，次日才能卖出；避免当日反向操作。")
+        lines.append("2) 涨跌停：普通±10%，ST±5%，避免触及涨跌停价位下单。")
+        lines.append("3) 交易单位：买入须为100股整数倍；卖出末端不足100股可一次性清仓。")
+        lines.append("4) 费用：买佣金约0.03%(最低5元)；卖佣金+印花税0.1%。")
+        lines.append("5) 无杠杆：仅做多。")
 
-风险与仓位控制：
-- 单票目标仓位不超过初始资金的30%，单次买入按100股整数倍；资金不足一手则`hold`。
-- 止损遵循第三类卖点原则；利润目标与风险比至少1.5:1。
+        lines.append("\n[策略参数(供你严格参考)]")
+        lines.append(f"pullback_tolerance: {pull_tol}")
+        lines.append(f"RSI: buy_low {rsi_buy_low}, neutral [{rsi_neu_low},{rsi_neu_high}], sell_high {rsi_sell_high}")
+        lines.append(f"risk: position_limit_pct {pos_limit_pct}, stop_loss_pct {stop_loss_pct}, tp_multipliers {tp_mults}")
 
-输出格式（仅JSON）：
-```json
-{
-  "股票代码": {
-    "signal": "buy|sell|hold",
-    "quantity": 100,
-    "profit_target": 15.50,
-    "stop_loss": 13.20,
-    "confidence": 0.75,
-    "justification": "基于帝论第X类买/卖点的简短理由"
-  }
-}
-```
+        lines.append("\n[帝论三类买点与卖点要点——请据此判断]")
+        lines.append("买点：")
+        lines.append("- 第一类：趋势突破与启动（均线多头，关键位突破，MACD为正）")
+        lines.append("- 第二类：上行趋势回踩确认（MA10/MA20附近企稳，RSI中性偏强）")
+        lines.append("- 第三类：超跌反弹（RSI低位快速回升，伴随MACD改善）")
+        lines.append("卖点：")
+        lines.append("- 第一类：趋势破坏（跌破MA20且MACD转负）")
+        lines.append("- 第二类：冲高回落（RSI>阈值后回落，价跌破MA5等迹象）")
+        lines.append("- 第三类：止损退出（相对买入价跌破止损阈值）")
 
-注意：
-- quantity 必须是100的整数倍
-- signal只能是：buy（买入）、sell（卖出）、hold（持有）
-- 已有持仓的可以sell，没有持仓的可以buy
-- T+1约束：当日买入的股票不要在当天给出sell（返回hold或仅给出未来计划）
-- 请严格按照JSON格式输出，不要包含其他内容
+        lines.append("\n[风控与仓位]")
+        lines.append("- 单票目标不超过初始资金的position_limit_pct；资金不足一手则hold。")
+        lines.append("- 止损严格执行；止盈目标可参考tp_multipliers。")
 
-请分析并输出JSON：
-"""
-        
-        return prompt
+        lines.append("\n[仅输出JSON，结构如下]")
+        lines.append("{")
+        lines.append("  \"股票代码\": { \"signal\": \"buy|sell|hold\", \"quantity\": 100, \"tp\": 15.50, \"sl\": 13.20, \"confidence\": 0.75, \"reason\": \"基于三类买/卖点的简短理由\" }")
+        lines.append("}")
+        lines.append("不要输出任何解释；仅返回JSON对象。若不满足买/卖条件则返回hold。")
+
+        # 用户自定义提示词与策略文档参考
+        custom_prompt = account_info.get('custom_prompt', '')
+        docs = account_info.get('strategy_docs', [])
+        if custom_prompt:
+            lines.append("\n[用户自定义提示词——严格在上述约束下执行]")
+            lines.append(custom_prompt)
+        if docs:
+            lines.append("\n[策略文档参考路径]")
+            for p in docs:
+                lines.append(f"- {p}")
+
+        return "\n".join(lines)
     
     def _call_llm(self, prompt: str) -> str:
         """调用LLM API"""
@@ -387,19 +392,40 @@ A股交易规则（硬性约束）：
             raise Exception(error_msg)
     
     def _parse_response(self, response: str) -> Dict:
-        """解析响应"""
-        response = response.strip()
-        
-        # 提取JSON
-        if '```json' in response:
-            response = response.split('```json')[1].split('```')[0]
-        elif '```' in response:
-            response = response.split('```')[1].split('```')[0]
-        
+        """解析LLM响应为结构化决策；容忍代码块包装并做字段校验"""
+        s = response.strip()
+        if '```' in s:
+            # 尝试取最后一个代码块中的JSON
+            parts = s.split('```')
+            candidates = [p for p in parts if '{' in p and '}' in p]
+            s = candidates[-1] if candidates else s
+        # 取到JSON部分
+        if '{' in s:
+            s = s[s.find('{'):]
+        if '}' in s:
+            s = s[:s.rfind('}')+1]
+
         try:
-            decisions = json.loads(response.strip())
-            return decisions
-        except json.JSONDecodeError as e:
-            print(f"[ERROR] JSON解析失败: {e}")
-            print(f"[DATA] 响应内容:\n{response}")
-            return {}
+            obj = json.loads(s)
+        except Exception as e:
+            raise Exception(f"LLM返回解析失败: {e}")
+
+        clean = {}
+        for code, d in obj.items():
+            if not isinstance(d, dict):
+                continue
+            sig = str(d.get('signal', 'hold')).lower()
+            qty = int(d.get('quantity', 0))
+            tp = d.get('tp')
+            sl = d.get('sl')
+            reason = d.get('reason', '')
+            conf = float(d.get('confidence', 0))
+            clean[code] = {
+                'signal': sig,
+                'quantity': qty,
+                'tp': tp,
+                'sl': sl,
+                'reason': reason,
+                'confidence': conf
+            }
+        return clean

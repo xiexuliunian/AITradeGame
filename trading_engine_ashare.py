@@ -42,6 +42,12 @@ class AShareTradingEngine:
     def execute_trading_cycle(self) -> Dict:
         """执行交易周期"""
         try:
+            # 闭市时跳过交易，仅记录账户价值
+            try:
+                from market_data_ashare import AShareMarketDataFetcher
+                is_open = self.market_fetcher.is_market_open()
+            except Exception:
+                is_open = True
             # 获取市场数据
             market_state = self._get_market_state()
             
@@ -54,10 +60,12 @@ class AShareTradingEngine:
             # 构建账户信息
             account_info = self._build_account_info(portfolio)
             
-            # AI决策
-            decisions = self.ai_trader.make_decision(
-                market_state, portfolio, account_info
-            )
+            # AI决策（仅开市时）
+            decisions = {}
+            if is_open:
+                decisions = self.ai_trader.make_decision(
+                    market_state, portfolio, account_info
+                )
             
             # 记录对话
             self.db.add_conversation(
@@ -68,7 +76,9 @@ class AShareTradingEngine:
             )
             
             # 执行交易决策
-            execution_results = self._execute_decisions(decisions, market_state, portfolio)
+            execution_results = []
+            if is_open and decisions:
+                execution_results = self._execute_decisions(decisions, market_state, portfolio)
             
             # 更新组合并记录账户价值
             updated_portfolio = self.db.get_portfolio(self.model_id, current_prices)
@@ -114,12 +124,21 @@ class AShareTradingEngine:
         initial_capital = model['initial_capital']
         total_value = portfolio['total_value']
         total_return = ((total_value - initial_capital) / initial_capital) * 100
+        # 读取策略参数供AI使用
+        try:
+            settings = self.db.get_settings()
+            strategy_params = settings.get('strategy_params', {})
+        except Exception:
+            strategy_params = {}
         
         return {
             'current_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'total_return': total_return,
             'initial_capital': initial_capital,
-            'market': 'A-Share'  # 标识为A股市场
+            'market': 'A-Share',  # 标识为A股市场
+            'strategy_params': strategy_params,
+            'custom_prompt': self.db.get_settings().get('custom_prompt', ''),
+            'strategy_docs': self.db.get_settings().get('strategy_docs', [])
         }
     
     def _format_prompt(self, market_state: Dict, portfolio: Dict, 
@@ -213,6 +232,19 @@ class AShareTradingEngine:
         
         if not position:
             return {'stock': stock, 'error': '没有持仓'}
+
+        # T+1限制：当天买入次日才能卖出
+        try:
+            last_update_str = position.get('updated_at')
+            if last_update_str:
+                # 仅比较日期部分
+                last_date = datetime.strptime(last_update_str[:10], '%Y-%m-%d').date()
+                now_date = datetime.now().date()
+                if last_date == now_date:
+                    return {'stock': stock, 'error': 'T+1限制：当日买入的股票次日才能卖出'}
+        except Exception:
+            # 若时间解析失败，不强制限制
+            pass
         
         # 获取卖出数量
         quantity = int(decision.get('quantity', position['quantity']))

@@ -65,6 +65,7 @@ class TradingApp {
         this.initRealtimePrices();
         this.loadMarketStatusOnce();
         this.startRefreshCycles();
+        initLLMStrategyConfig();
         // Check for updates after initialization (with delay)
         setTimeout(() => this.checkForUpdates(true), 3000);
     }
@@ -124,6 +125,52 @@ class TradingApp {
             console.error('Failed to load models:', error);
         }
     }
+
+function initLLMStrategyConfig() {
+    const promptInput = document.getElementById('customPromptInput');
+    const savePromptBtn = document.getElementById('savePromptBtn');
+    const pdfInput = document.getElementById('pdfFileInput');
+    const uploadPdfBtn = document.getElementById('uploadPdfBtn');
+    const docList = document.getElementById('strategyDocList');
+
+    // Load settings to prefill
+    fetch('/api/settings').then(r => r.json()).then(s => {
+        promptInput.value = s.custom_prompt || '';
+        const docs = s.strategy_docs || [];
+        docList.innerHTML = docs.length ? docs.map(d => `<div class="doc-item">${d}</div>`).join('') : '<div class="empty-state">暂无文档</div>';
+    }).catch(() => {});
+
+    savePromptBtn.addEventListener('click', () => {
+        fetch('/api/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ custom_prompt: promptInput.value })
+        }).then(r => r.json()).then(res => {
+            alert(res.success ? '提示词已保存' : '保存失败');
+        }).catch(() => alert('保存失败'));
+    });
+
+    uploadPdfBtn.addEventListener('click', () => {
+        const file = pdfInput.files && pdfInput.files[0];
+        if (!file) { alert('请先选择PDF文件'); return; }
+        const formData = new FormData();
+        formData.append('file', file);
+        fetch('/api/llm/upload', { method: 'POST', body: formData })
+            .then(r => r.json()).then(res => {
+                if (res.ok) {
+                    // refresh list
+                    fetch('/api/settings').then(r => r.json()).then(s => {
+                        const docs = s.strategy_docs || [];
+                        docList.innerHTML = docs.length ? docs.map(d => `<div class="doc-item">${d}</div>`).join('') : '<div class="empty-state">暂无文档</div>';
+                    });
+                    alert('上传成功');
+                    pdfInput.value = '';
+                } else {
+                    alert('上传失败');
+                }
+            }).catch(() => alert('上传失败'));
+    });
+}
 
     renderModels(models) {
         const container = document.getElementById('modelList');

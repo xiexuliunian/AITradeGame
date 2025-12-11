@@ -4,6 +4,7 @@ A-Share Trading Application - A股交易应用主程序
 """
 from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 import time
 import threading
 import json
@@ -455,8 +456,11 @@ def update_settings():
         trading_frequency_minutes = int(data.get('trading_frequency_minutes', 60))
         trading_fee_rate = float(data.get('trading_fee_rate', COMMISSION_RATE))
         stock_pool = data.get('stock_pool') or ['600519','000858','601318','600036','000333','300750']
+        strategy_params = data.get('strategy_params')
 
-        success = db.update_settings(trading_frequency_minutes, trading_fee_rate, stock_pool)
+        custom_prompt = data.get('custom_prompt', None)
+        strategy_docs = data.get('strategy_docs', None)
+        success = db.update_settings(trading_frequency_minutes, trading_fee_rate, stock_pool, strategy_params, custom_prompt, strategy_docs)
 
         if success:
             return jsonify({'success': True, 'message': 'Settings updated successfully'})
@@ -479,8 +483,33 @@ def update_stocks():
     data = request.json
     stocks = data.get('stocks', [])
     settings = db.get_settings()
-    success = db.update_settings(settings['trading_frequency_minutes'], settings['trading_fee_rate'], stocks)
+    success = db.update_settings(settings['trading_frequency_minutes'], settings['trading_fee_rate'], stocks, settings.get('strategy_params'), settings.get('custom_prompt'), settings.get('strategy_docs'))
     return jsonify({'success': success, 'stocks': stocks})
+
+@app.route('/api/llm/upload', methods=['POST'])
+def upload_strategy_doc():
+    """上传PDF策略文档，保存路径并记录到settings.strategy_docs"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': '未找到文件字段 file'}), 400
+        f = request.files['file']
+        if f.filename == '':
+            return jsonify({'error': '空文件名'}), 400
+        filename = secure_filename(f.filename)
+        save_dir = os.path.join(os.path.dirname(__file__), 'release')
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, filename)
+        f.save(save_path)
+
+        settings = db.get_settings()
+        docs = settings.get('strategy_docs', [])
+        rel_path = f"release/{filename}"
+        if rel_path not in docs:
+            docs.append(rel_path)
+        ok = db.update_settings(settings['trading_frequency_minutes'], settings['trading_fee_rate'], settings.get('stock_pool'), settings.get('strategy_params'), settings.get('custom_prompt'), docs)
+        return jsonify({'ok': ok, 'path': rel_path})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/market/stream')
 def market_stream():

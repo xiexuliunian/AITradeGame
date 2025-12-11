@@ -113,6 +113,9 @@ class Database:
                 trading_frequency_minutes INTEGER DEFAULT 60,
                 trading_fee_rate REAL DEFAULT 0.001,
                 stock_pool TEXT DEFAULT '["600519","000858","601318","600036","000333","300750"]',
+                strategy_params TEXT DEFAULT '{"ma": {"pullback_tolerance": 0.01}, "rsi": {"buy_low": 30, "neutral_low": 45, "neutral_high": 60, "sell_high": 70}, "risk": {"position_limit_pct": 0.30, "stop_loss_pct": 0.05, "tp_multipliers": {"third": 1.06, "first": 1.08, "trend": 1.10}} }',
+                custom_prompt TEXT DEFAULT '',
+                strategy_docs TEXT DEFAULT '[]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -122,8 +125,8 @@ class Database:
         cursor.execute('SELECT COUNT(*) FROM settings')
         if cursor.fetchone()[0] == 0:
             cursor.execute('''
-                INSERT INTO settings (trading_frequency_minutes, trading_fee_rate, stock_pool)
-                VALUES (60, 0.001, '["600519","000858","601318","600036","000333","300750"]')
+                INSERT INTO settings (trading_frequency_minutes, trading_fee_rate, stock_pool, strategy_params, custom_prompt, strategy_docs)
+                VALUES (60, 0.001, '["600519","000858","601318","600036","000333","300750"]', '{"ma": {"pullback_tolerance": 0.01}, "rsi": {"buy_low": 30, "neutral_low": 45, "neutral_high": 60, "sell_high": 70}, "risk": {"position_limit_pct": 0.30, "stop_loss_pct": 0.05, "tp_multipliers": {"third": 1.06, "first": 1.08, "trend": 1.10}} }', '', '[]')
             ''')
 
         conn.commit()
@@ -422,7 +425,7 @@ class Database:
         cursor = conn.cursor()
 
         cursor.execute('''
-            SELECT trading_frequency_minutes, trading_fee_rate, stock_pool
+            SELECT trading_frequency_minutes, trading_fee_rate, stock_pool, strategy_params, custom_prompt, strategy_docs
             FROM settings
             ORDER BY id DESC
             LIMIT 1
@@ -435,17 +438,23 @@ class Database:
             return {
                 'trading_frequency_minutes': row['trading_frequency_minutes'],
                 'trading_fee_rate': row['trading_fee_rate'],
-                'stock_pool': json.loads(row['stock_pool']) if row['stock_pool'] else []
+                'stock_pool': json.loads(row['stock_pool']) if row['stock_pool'] else [],
+                'strategy_params': json.loads(row['strategy_params']) if row['strategy_params'] else {},
+                'custom_prompt': row['custom_prompt'] or '',
+                'strategy_docs': json.loads(row['strategy_docs']) if row['strategy_docs'] else []
             }
         else:
             # Return default settings if none exist
             return {
                 'trading_frequency_minutes': 60,
                 'trading_fee_rate': 0.001,
-                'stock_pool': ["600519","000858","601318","600036","000333","300750"]
+                'stock_pool': ["600519","000858","601318","600036","000333","300750"],
+                'strategy_params': {"ma": {"pullback_tolerance": 0.01}, "rsi": {"buy_low": 30, "neutral_low": 45, "neutral_high": 60, "sell_high": 70}, "risk": {"position_limit_pct": 0.30, "stop_loss_pct": 0.05, "tp_multipliers": {"third": 1.06, "first": 1.08, "trend": 1.10}} },
+                'custom_prompt': '',
+                'strategy_docs': []
             }
 
-    def update_settings(self, trading_frequency_minutes: int, trading_fee_rate: float, stock_pool: Optional[List[str]] = None) -> bool:
+    def update_settings(self, trading_frequency_minutes: int, trading_fee_rate: float, stock_pool: Optional[List[str]] = None, strategy_params: Optional[Dict] = None, custom_prompt: Optional[str] = None, strategy_docs: Optional[List[str]] = None) -> bool:
         """Update system settings"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -456,11 +465,14 @@ class Database:
                 SET trading_frequency_minutes = ?,
                     trading_fee_rate = ?,
                     stock_pool = ?,
+                    strategy_params = ?,
+                    custom_prompt = ?,
+                    strategy_docs = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = (
                     SELECT id FROM settings ORDER BY id DESC LIMIT 1
                 )
-            ''', (trading_frequency_minutes, trading_fee_rate, json.dumps(stock_pool or ["600519","000858","601318","600036","000333","300750"])) )
+            ''', (trading_frequency_minutes, trading_fee_rate, json.dumps(stock_pool or ["600519","000858","601318","600036","000333","300750"]), json.dumps(strategy_params or {"ma": {"pullback_tolerance": 0.01}, "rsi": {"buy_low": 30, "neutral_low": 45, "neutral_high": 60, "sell_high": 70}, "risk": {"position_limit_pct": 0.30, "stop_loss_pct": 0.05, "tp_multipliers": {"third": 1.06, "first": 1.08, "trend": 1.10}} }), custom_prompt or '', json.dumps(strategy_docs or []))
 
             conn.commit()
             conn.close()
