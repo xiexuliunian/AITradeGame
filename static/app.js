@@ -224,7 +224,8 @@ class TradingApp {
                     lastRender = now;
                     const payload = JSON.parse(e.data);
                     const prices = payload.prices || {};
-                    this.renderMarketPrices(prices);
+                    const isOpen = !!payload.open;
+                    this.renderMarketPrices(prices, isOpen);
                 } catch (err) {
                     console.warn('SSE parse error', err);
                 }
@@ -238,15 +239,16 @@ class TradingApp {
         }
     }
 
-    renderMarketPrices(prices) {
+    renderMarketPrices(prices, isOpen) {
         const container = document.getElementById('marketPrices');
         if (!container || !prices) return;
+        const header = `<div class="market-status">${isOpen ? '开市（实时）' : '已闭市'}</div>`;
         const rows = Object.keys(prices).map(code => {
             const p = prices[code];
-            const display = (p && typeof p.price === 'number') ? p.price.toFixed(2) : '/';
+            const display = isOpen ? ((p && typeof p.price === 'number') ? p.price.toFixed(2) : '/') : '已闭市';
             return `<div class=\"price-row\"><span>${code}</span><span>${display}</span></div>`;
         }).join('');
-        container.innerHTML = rows;
+        container.innerHTML = header + rows;
     }
 
     async loadStockPool() {

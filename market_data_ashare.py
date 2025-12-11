@@ -233,6 +233,24 @@ class AShareMarketDataFetcher:
         except Exception as e:
             print(f"[ERROR] Market data fetch failed: {e}")
             return {code: self._empty_price_entry(code) for code in stocks}
+
+    def is_market_open(self) -> bool:
+        """判断A股是否开市（不含节假日表，简化版）
+        开市时间：周一至周五
+        09:30-11:30，13:00-15:00（Asia/Shanghai）
+        """
+        now = datetime.now()
+        # 简化：使用本地时间，假设为中国时区环境；如需严格，可用 pytz
+        if now.weekday() >= 5:
+            return False
+        h = now.hour
+        m = now.minute
+        hm = h * 60 + m
+        morning_start = 9 * 60 + 30
+        morning_end = 11 * 60 + 30
+        afternoon_start = 13 * 60
+        afternoon_end = 15 * 60
+        return (morning_start <= hm <= morning_end) or (afternoon_start <= hm <= afternoon_end)
     
     def _get_mock_prices(self, stocks: List[str]) -> Dict[str, float]:
         """Generate mock prices for testing"""

@@ -312,9 +312,13 @@ def get_models_chart_data():
 @app.route('/api/market/prices', methods=['GET'])
 def get_market_prices():
     """获取市场价格"""
-    stocks = ['600519', '000858', '601318', '600036', '000333', '300750']
+    settings = db.get_settings()
+    stocks = settings.get('stock_pool', ['600519', '000858', '601318', '600036', '000333', '300750'])
     prices = market_fetcher.get_current_prices(stocks)
-    return jsonify(prices)
+    return jsonify({
+        'open': market_fetcher.is_market_open(),
+        'prices': prices
+    })
 
 @app.route('/api/models/<int:model_id>/execute', methods=['POST'])
 def execute_trading(model_id):
@@ -482,7 +486,7 @@ def market_stream():
                 prices = market_fetcher.get_current_prices(stocks)
                 price_cache['last_update'] = datetime.now().isoformat()
                 price_cache['prices'] = prices
-                payload = json.dumps({'ts': price_cache['last_update'], 'prices': prices})
+                payload = json.dumps({'ts': price_cache['last_update'], 'open': market_fetcher.is_market_open(), 'prices': prices})
                 yield f"data: {payload}\n\n"
                 _t.sleep(2)
             except Exception as e:
@@ -490,6 +494,14 @@ def market_stream():
                 _t.sleep(5)
 
     return Response(event_stream(), mimetype='text/event-stream')
+
+@app.route('/api/market/status', methods=['GET'])
+def market_status():
+    """返回当前A股开闭市状态"""
+    try:
+        return jsonify({'open': market_fetcher.is_market_open()})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/version', methods=['GET'])
 def get_version():
