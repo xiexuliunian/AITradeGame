@@ -148,7 +148,15 @@ class AShareMarketDataFetcher:
                     url = 'http://qt.gtimg.cn/q=' + ','.join(prefix_codes)
                 headers = {'Referer': 'http://finance.sina.com.cn/'}
                 resp = self.requests.get(url, headers=headers, timeout=5)
-                text = resp.text
+                # 处理中文编码（新浪/腾讯多为gbk）
+                try:
+                    resp.encoding = resp.encoding or 'gbk'
+                except Exception:
+                    pass
+                text = resp.text or ''
+                if not text or text.strip().startswith('<'):
+                    # 返回了HTML或空内容，视为不可用
+                    return {code: self._empty_price_entry(code) for code in stocks}
                 lines = text.strip().split(';')
                 for line, code in zip(lines, stocks):
                     try:
@@ -156,7 +164,7 @@ class AShareMarketDataFetcher:
                             # var hq_str_sh600519="贵州茅台,1600.00,1602.00,1598.00,...";
                             parts = line.split('="')
                             if len(parts) < 2:
-                                prices[code] = self._get_mock_price_single(code)
+                                prices[code] = self._empty_price_entry(code)
                                 continue
                             data = parts[1].split(',')
                             name = data[0]
@@ -179,7 +187,7 @@ class AShareMarketDataFetcher:
                             'turnover': 0
                         }
                     except Exception:
-                        prices[code] = self._get_mock_price_single(code)
+                        prices[code] = self._empty_price_entry(code)
 
             elif self.source == 'baostock' and self.bs:
                 # 回退到baostock（日线）

@@ -124,6 +124,21 @@ def fetch_provider_models():
         print(f"[ERROR] Fetch models failed: {e}")
         return jsonify({'error': f'Failed to fetch models: {str(e)}'}), 500
 
+# ============ Update Check (stub) ============
+
+@app.route('/api/check-update', methods=['GET'])
+def check_update():
+    """前端使用的检查更新端点，返回当前版本与占位的最新版本信息"""
+    try:
+        return jsonify({
+            'current_version': __version__,
+            'latest_version': __version__,
+            'has_update': False,
+            'release_notes': ''
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # ============ Model API Endpoints ============
 
 @app.route('/api/models', methods=['GET'])
